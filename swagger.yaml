@@ -1,0 +1,924 @@
+openapi: 3.0.0
+info:
+  title: Darhub API
+  version: 1.0.0
+  description: API documentation for Darhub backend
+
+servers:
+  - url: http://localhost:5678
+    description: Local development server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        username:
+          type: string
+        mobile_number:
+          type: string
+        is_superuser:
+          type: boolean
+        user_type:
+          type: integer
+
+    UserProfile:
+      type: object
+      properties:
+        user_id:
+          type: integer
+        first_name:
+          type: string
+        last_name:
+          type: string
+        whatsapp_number:
+          type: string
+        user_image_url:
+          type: string
+        aadhar_number:
+          type: string
+        pan_card_number:
+          type: string
+
+    Address:
+      type: object
+      properties:
+        lane_1:
+          type: string
+        lane_2:
+          type: string
+        state:
+          type: string
+        district:
+          type: string
+        block:
+          type: string
+        village:
+          type: string
+        pincode:
+          type: string
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        token:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+        - username
+        - mobile_number
+        - addresses
+        - first_name
+        - last_name
+        - role_privilage_id
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        username:
+          type: string
+        mobile_number:
+          type: string
+        addresses:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        first_name:
+          type: string
+        last_name:
+          type: string
+        whatsapp_number:
+          type: string
+        user_image_original_filename:
+          type: string
+        aadhar_number:
+          type: string
+        pan_card_number:
+          type: string
+        role_privilage_id:
+          type: integer
+
+    RegisterResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        user_id:
+          type: integer
+        token:
+          type: string
+
+    State:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+
+    District:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        state_id:
+          type: integer
+
+    Block:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        district_id:
+          type: integer
+
+    Drone:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        # Add more properties as needed
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+        booking_id:
+          type: string
+        # Add more properties
+
+    Comment:
+      type: object
+      properties:
+        id:
+          type: integer
+        content:
+          type: string
+        # Add more properties
+
+    Column:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        module:
+          type: string
+
+paths:
+  /:
+    get:
+      summary: Welcome message
+      responses:
+        '200':
+          description: Welcome message
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/register:
+    post:
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                user_image_original_filename:
+                  type: string
+                  format: binary
+                addresses:
+                  type: string
+                  description: JSON string of addresses array
+                email:
+                  type: string
+                password:
+                  type: string
+                username:
+                  type: string
+                mobile_number:
+                  type: string
+                first_name:
+                  type: string
+                last_name:
+                  type: string
+                whatsapp_number:
+                  type: string
+                aadhar_number:
+                  type: string
+                pan_card_number:
+                  type: string
+                role_privilage_id:
+                  type: integer
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /api/login:
+    post:
+      summary: Login user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+        '404':
+          description: User not found
+        '500':
+          description: Internal server error
+
+  /api/deleteUser:
+    post:
+      summary: Delete user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: integer
+      responses:
+        '200':
+          description: User deleted
+        '401':
+          description: Unauthorized
+        '500':
+          description: Internal server error
+
+  /api/updateprofile:
+    put:
+      summary: Update user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: integer
+                # Add other fields
+      responses:
+        '200':
+          description: Profile updated
+        '500':
+          description: Internal server error
+
+  /api/refresh-token:
+    post:
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+        '401':
+          description: Invalid refresh token
+
+  /api/get-user/{user_id}:
+    get:
+      summary: Get user by ID
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: User data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: User not found
+
+  /api/filter:
+    post:
+      summary: Filter users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                # Define filter criteria
+      responses:
+        '200':
+          description: Filtered users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+
+  /api/users/booking-list:
+    get:
+      summary: Get users for booking
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+
+  /api/users/search:
+    get:
+      summary: Search users by email
+      parameters:
+        - name: email
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /api/locations/states:
+    get:
+      summary: Get all states
+      responses:
+        '200':
+          description: List of states
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/State'
+
+  /api/locations/districts/{state_id}:
+    get:
+      summary: Get districts by state
+      parameters:
+        - name: state_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of districts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/District'
+
+  /api/locations/blocks/{district_id}:
+    get:
+      summary: Get blocks by district
+      parameters:
+        - name: district_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of blocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Block'
+
+  /order/create-order:
+    post:
+      summary: Create a new order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                # Define order fields
+      responses:
+        '201':
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+
+  /order/crops/list:
+    get:
+      summary: Get list of crops
+      responses:
+        '200':
+          description: List of crops
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                    name:
+                      type: string
+
+  /order/getOrderById/{booking_id}:
+    get:
+      summary: Get order by booking ID
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+
+  /order/getOrderByUserId/{user_id}:
+    get:
+      summary: Get orders by user ID
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+
+  /order/filter-orders:
+    post:
+      summary: Filter orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                # Define filter criteria
+      responses:
+        '200':
+          description: Filtered orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+
+  /admin/drones:
+    post:
+      summary: Create a drone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Drone'
+      responses:
+        '201':
+          description: Drone created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Drone'
+
+  /admin/get-drones:
+    get:
+      summary: Get all drones
+      responses:
+        '200':
+          description: List of drones
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Drone'
+
+  /admin/get-drone/{id}:
+    get:
+      summary: Get drone by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Drone details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Drone'
+
+  /admin/update-drone/{id}:
+    put:
+      summary: Update drone
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Drone'
+      responses:
+        '200':
+          description: Drone updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Drone'
+
+  /admin/delete-drone/{id}:
+    delete:
+      summary: Delete drone
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Drone deleted
+
+  /admin/filter-drone:
+    post:
+      summary: Filter drones
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                # Define filter criteria
+      responses:
+        '200':
+          description: Filtered drones
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Drone'
+
+  /admin/update-order:
+    post:
+      summary: Update order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                # Define update fields
+      responses:
+        '200':
+          description: Order updated
+
+  /admin/create-comment:
+    post:
+      summary: Create comment
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Comment'
+      responses:
+        '201':
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+
+  /admin/getAllcomments:
+    get:
+      summary: Get all comments
+      responses:
+        '200':
+          description: List of comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Comment'
+
+  /admin/get-comment-byId/{id}:
+    get:
+      summary: Get comment by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Comment details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+
+  /admin/update-comment/{id}:
+    put:
+      summary: Update comment
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Comment'
+      responses:
+        '200':
+          description: Comment updated
+
+  /admin/delete-comment/{id}:
+    delete:
+      summary: Delete comment
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Comment deleted
+
+  /admin/filter-comments:
+    post:
+      summary: Filter comments
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                # Define filter criteria
+      responses:
+        '200':
+          description: Filtered comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Comment'
+
+  /admin/spraying-daily-logs/filter:
+    post:
+      summary: Filter spraying daily logs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                # Define filter criteria
+      responses:
+        '200':
+          description: Filtered logs
+
+  /admin/createCol:
+    post:
+      summary: Create column
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Column'
+      responses:
+        '201':
+          description: Column created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Column'
+
+  /admin/getCol:
+    get:
+      summary: Get all columns
+      parameters:
+        - name: module
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of columns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Column'
+
+  /admin/getCol/{id}:
+    get:
+      summary: Get column by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Column details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Column'
+
+  /admin/updateCol/{id}:
+    put:
+      summary: Update column
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Column'
+      responses:
+        '200':
+          description: Column updated
+
+  /admin/deleteCol/{id}:
+    delete:
+      summary: Delete column
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Column deleted
+
+  /admin/filter-col:
+    post:
+      summary: Filter columns
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                # Define filter criteria
+      responses:
+        '200':
+          description: Filtered columns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Column'
