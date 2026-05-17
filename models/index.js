@@ -43,6 +43,7 @@ import SprayingWorkAssignee from './SprayingWorkAsignee.js';
 import SprayingDailyLogs from './SprayingDailyLogs.js';
 import AuditLog from './AuditLog.js';
 import SprayingOrderComment from './SprayingOrderComment.js';
+import MasterWorkingDays from './MasterWorkingdays.js';
 // import controll from './controll.js';
 
 // Initialize Sequelize
@@ -130,7 +131,8 @@ MasterPropeller: MasterPropeller(sequelize,DataTypes),
   SprayingWorkAssignee:SprayingWorkAssignee(sequelize,DataTypes),
   SprayingDailyLogs:SprayingDailyLogs(sequelize,DataTypes),
   AuditLog:AuditLog(sequelize,DataTypes),
-  SprayingOrderComment: SprayingOrderComment(sequelize,DataTypes)
+  SprayingOrderComment: SprayingOrderComment(sequelize,DataTypes),
+  MasterWorkingDays: MasterWorkingDays(sequelize,DataTypes)
 
 
 

@@ -15,6 +15,8 @@ import router from "./routes/adminRoutes.js";
 import userRouter from "./routes/user.routes.js";
 import locationRoutes from "./routes/locationRoutes.js"
 import orderRouter from "./routes/orderRoutes.js"
+import cropRouter from "./routes/cropRoutes.js";
+import workingDaysRouter from "./routes/workingDaysRoutes.js";
 
 dotenv.config();
 const app = express();
@@ -22,12 +24,13 @@ const PORT = process.env.PORT || 5678;
 const HOST = "0.0.0.0";
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cors({   origin: [
       "http://localhost:5173",
       "http://localhost:3000",
       "http://localhost:5174",
       "https://darhubfrontend.onrender.com",
-      
+
     ], credentials: true }));
 
 
@@ -46,6 +49,9 @@ app.use('/admin',router)
 app.use('/api',userRouter)
 app.use("/api/locations", locationRoutes);
 app.use('/order',orderRouter)
+app.use('/crops',cropRouter)
+app.use('/working-days',workingDaysRouter)
+
 
 
 
