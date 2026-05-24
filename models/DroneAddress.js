@@ -32,7 +32,14 @@ const DroneAddress = (sequelize, DataTypes) =>
       },
       village: {
         type: DataTypes.STRING,
-        allowNull: false,
+        allowNull: true,
+      },
+      panchayat:{
+        type: DataTypes.INTEGER,
+        allowNull:false,
+      },
+      is_active:{
+      type:DataTypes.BOOLEAN
       },
       pincode: {
         type: DataTypes.STRING,
