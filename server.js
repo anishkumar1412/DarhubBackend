@@ -1,20 +1,20 @@
 import express, { Router } from "express";
 import dotenv from "dotenv";
-import './models/index.js';
-import cors from 'cors';
-import swaggerUi from 'swagger-ui-express';
-import yaml from 'js-yaml';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import "./models/index.js";
+import cors from "cors";
+import swaggerUi from "swagger-ui-express";
+import yaml from "js-yaml";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 import router from "./routes/adminRoutes.js";
 import userRouter from "./routes/user.routes.js";
-import locationRoutes from "./routes/locationRoutes.js"
-import orderRouter from "./routes/orderRoutes.js"
+import locationRoutes from "./routes/locationRoutes.js";
+import orderRouter from "./routes/orderRoutes.js";
 import cropRouter from "./routes/cropRoutes.js";
 import workingDaysRouter from "./routes/workingDaysRoutes.js";
 
@@ -25,36 +25,38 @@ const HOST = "0.0.0.0";
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors({   origin: [
+app.use(
+  cors({
+    origin: [
       "http://localhost:5173",
       "http://localhost:3000",
       "http://localhost:5174",
       "https://darhubfrontend.onrender.com",
-
-    ], credentials: true }));
-
+      "https://darhubadmin.onrender.com",
+    ],
+    credentials: true,
+  }),
+);
 
 // Load Swagger YAML
-const swaggerDocument = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger.yaml'), 'utf8'));
+const swaggerDocument = yaml.load(
+  fs.readFileSync(path.join(__dirname, "swagger.yaml"), "utf8"),
+);
 
 // Swagger UI route
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
+app.get("/", (req, res) => {
+  res.send("Welcome to darhub Backend");
+});
 
-app.get("/",(req,res)=>{
-    res.send("Welcome to darhub Backend");
-})
-
-app.use('/admin',router)
-app.use('/api',userRouter)
+app.use("/admin", router);
+app.use("/api", userRouter);
 app.use("/api/locations", locationRoutes);
-app.use('/order',orderRouter)
-app.use('/crops',cropRouter)
-app.use('/working-days',workingDaysRouter)
+app.use("/order", orderRouter);
+app.use("/crops", cropRouter);
+app.use("/working-days", workingDaysRouter);
 
-
-
-
-app.listen(PORT,HOST,()=>{
-    console.log(`Server is running on http://localhost:${PORT}`);
-})
+app.listen(PORT, HOST, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
