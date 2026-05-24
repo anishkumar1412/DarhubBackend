@@ -1,7 +1,7 @@
 import Sequelize, { DataTypes, QueryTypes } from 'sequelize';
 import db1 from '../config/db.js';
 
-// Import all models
+// ── Existing models ───────────────────────────────────────────────
 import Drone from './Drone1.js';
 import DroneArms from './DroneArms.js';
 import DroneBattery from './DroneBattery.js';
@@ -25,7 +25,6 @@ import MasterDistrict from './MasterDistrict.js';
 import MasterGramPanchayat from './MasterGramPanchayat.js';
 import MasterLandingGear from './MasterLandingGear.js';
 import MasterMotor from './MasterMotor.js';
-// import MasterNozzle from './MasterNozzle.js';
 
 import auditFields from './auditFields.js';
 import MasterPropeller from './MasterProperller.js';
@@ -44,9 +43,14 @@ import SprayingDailyLogs from './SprayingDailyLogs.js';
 import AuditLog from './AuditLog.js';
 import SprayingOrderComment from './SprayingOrderComment.js';
 import MasterWorkingDays from './MasterWorkingdays.js';
-// import controll from './controll.js';
 
-// Initialize Sequelize
+// ── Admin auth models (NEW) ───────────────────────────────────────
+import AdminProfile from './AdminProfile.js';
+import MasterRole from './MasterRole.js';
+import MasterPrivilage from './MasterPrivilage.js';
+import MasterRolePrivilage from './MasterRolePrivilage.js';
+
+// ── Initialize Sequelize ──────────────────────────────────────────
 const sequelize = new Sequelize(
   db1.DATABASE,
   db1.USER,
@@ -59,33 +63,34 @@ const sequelize = new Sequelize(
     dialectOptions: {
       ssl: {
         require: true,
-        rejectUnauthorized: false
-      }
+        rejectUnauthorized: false,
+      },
     },
     pool: {
       max: 40,
       min: 0,
       acquire: 30000,
-      idle: 10000
-    }
+      idle: 10000,
+    },
   }
 );
 
-// Test connection
+// ── Test connection ───────────────────────────────────────────────
 try {
   await sequelize.authenticate();
-  console.log("✅ Connection has been established successfully.");
+  console.log('✅ Connection has been established successfully.');
 } catch (err) {
-  console.error("❌ Unable to connect to the database:", err);
+  console.error('❌ Unable to connect to the database:', err);
 }
 
-// Add models to db object
+// ── Register all models ───────────────────────────────────────────
 const db = {
   Sequelize,
   sequelize,
   DataTypes,
   QueryTypes,
 
+  // Drone models
   Drone1: Drone(sequelize, DataTypes),
   DroneArms: DroneArms(sequelize, DataTypes),
   DroneBattery: DroneBattery(sequelize, DataTypes),
@@ -98,17 +103,14 @@ const db = {
   DronePipe: DronePipe(sequelize, DataTypes),
   DronePropeller: DronePropeller(sequelize, DataTypes),
 
-  User:User(sequelize,DataTypes),
-UserAddress:UserAddress(sequelize,DataTypes),
-UserProfile:UserProfile(sequelize,DataTypes),
-UserRole:UserRole(sequelize,DataTypes),
-MasterPropeller: MasterPropeller(sequelize,DataTypes),
+  // User models
+  User: User(sequelize, DataTypes),
+  UserAddress: UserAddress(sequelize, DataTypes),
+  UserProfile: UserProfile(sequelize, DataTypes),
+  UserRole: UserRole(sequelize, DataTypes),
 
-
-
-
-  
-
+  // Master models
+  MasterPropeller: MasterPropeller(sequelize, DataTypes),
   MasterArms: MasterArms(sequelize, DataTypes),
   MasterBattery: MasterBattery(sequelize, DataTypes),
   MasterBlock: MasterBlock(sequelize, DataTypes),
@@ -120,34 +122,41 @@ MasterPropeller: MasterPropeller(sequelize,DataTypes),
   MasterGramPanchayat: MasterGramPanchayat(sequelize, DataTypes),
   MasterLandingGear: MasterLandingGear(sequelize, DataTypes),
   MasterMotor: MasterMotor(sequelize, DataTypes),
-  MasterTransmitter:MasterTransmitter(sequelize,DataTypes),
-  MasterReceiver:MasterReceiver(sequelize,DataTypes),
-  DroneAddress:DroneAddress(sequelize,DataTypes),
-  MasterDistrict:MasterDistrict(sequelize,DataTypes),
-  MasterBlock:MasterBlock(sequelize,DataTypes),
-  MasterState:MasterState(sequelize,DataTypes),
-  SprayingOrder:SprayingOrder(sequelize,DataTypes),
-  SprayingOrderAddress:SprayingOrderAddress(sequelize,DataTypes),
-  SprayingWorkAssignee:SprayingWorkAssignee(sequelize,DataTypes),
-  SprayingDailyLogs:SprayingDailyLogs(sequelize,DataTypes),
-  AuditLog:AuditLog(sequelize,DataTypes),
-  SprayingOrderComment: SprayingOrderComment(sequelize,DataTypes),
-  MasterWorkingDays: MasterWorkingDays(sequelize,DataTypes)
+  MasterTransmitter: MasterTransmitter(sequelize, DataTypes),
+  MasterReceiver: MasterReceiver(sequelize, DataTypes),
+  MasterState: MasterState(sequelize, DataTypes),
+  MasterWorkingDays: MasterWorkingDays(sequelize, DataTypes),
 
+  // Role & permission models (NOW REGISTERED)
+  MasterRole: MasterRole(sequelize, DataTypes),
+  MasterPrivilage: MasterPrivilage(sequelize, DataTypes),
+  MasterRolePrivilage: MasterRolePrivilage(sequelize, DataTypes),
 
+  // Admin auth models (NEW)
+  AdminProfile: AdminProfile(sequelize, DataTypes),
 
-  // MasterNozzle: MasterNozzle(sequelize, DataTypes),
+  // Drone address & location
+  DroneAddress: DroneAddress(sequelize, DataTypes),
 
-  
-  // controll: controll(sequelize, DataTypes)
+  // Order models
+  SprayingOrder: SprayingOrder(sequelize, DataTypes),
+  SprayingOrderAddress: SprayingOrderAddress(sequelize, DataTypes),
+  SprayingWorkAssignee: SprayingWorkAssignee(sequelize, DataTypes),
+  SprayingDailyLogs: SprayingDailyLogs(sequelize, DataTypes),
+  AuditLog: AuditLog(sequelize, DataTypes),
+  SprayingOrderComment: SprayingOrderComment(sequelize, DataTypes),
 };
 
-sequelize.sync({alter:false})
-    .then(() =>{
-        console.log("✅All models were synchronized successfully.")
-    })
-    .catch((err) =>{
-        console.log("❌Sync error",err);
-    })
+// Export a promise that resolves once all tables are synced.
+// server.js awaits this before running the super-admin bootstrap.
+export const syncPromise = sequelize
+  .sync({ alter: false })
+  .then(() => {
+    console.log('✅ All models were synchronized successfully.');
+  })
+  .catch((err) => {
+    console.error('❌ Sync error', err);
+    throw err;
+  });
 
 export default db;
