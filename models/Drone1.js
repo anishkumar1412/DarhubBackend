@@ -33,7 +33,7 @@ const Drone = (sequelize, DataTypes) =>
       water_pump_id:      DataTypes.INTEGER,
       is_extension_board: DataTypes.BOOLEAN,
       extension_board_id: DataTypes.INTEGER,
-
+      
       /* ── NEW FIELDS ────────────────────────────────────── */
       pilot_user_id: {
         type:      DataTypes.INTEGER,

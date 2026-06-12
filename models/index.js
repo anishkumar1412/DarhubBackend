@@ -1,5 +1,6 @@
 import Sequelize, { DataTypes, QueryTypes } from 'sequelize';
 import db1 from '../config/db.js';
+import logger from '../utils/logger.js';
 
 // ── Existing models ───────────────────────────────────────────────
 import Drone from './Drone1.js';
@@ -50,6 +51,14 @@ import MasterRole from './MasterRole.js';
 import MasterPrivilage from './MasterPrivilage.js';
 import MasterRolePrivilage from './MasterRolePrivilage.js';
 
+// ── Inventory dashboard models ────────────────────────────────────
+import InventoryAccessory from './InventoryAccessory.js';
+import InventoryDrone from './InventoryDrone.js';
+import InventoryShipment from './InventoryShipment.js';
+import MaintenanceLog from './MaintenanceLog.js';
+import PurchaseOrder from './PurchaseOrder.js';
+import Vendor from './Vendor.js';
+
 // ── Initialize Sequelize ──────────────────────────────────────────
 const sequelize = new Sequelize(
   db1.DATABASE,
@@ -78,9 +87,9 @@ const sequelize = new Sequelize(
 // ── Test connection ───────────────────────────────────────────────
 try {
   await sequelize.authenticate();
-  console.log('✅ Connection has been established successfully.');
+  logger.info('✅ Connection has been established successfully.');
 } catch (err) {
-  console.error('❌ Unable to connect to the database:', err);
+  logger.error('❌ Unable to connect to the database:', err);
 }
 
 // ── Register all models ───────────────────────────────────────────
@@ -89,6 +98,7 @@ const db = {
   sequelize,
   DataTypes,
   QueryTypes,
+  Op: Sequelize.Op,
 
   // Drone models
   Drone1: Drone(sequelize, DataTypes),
@@ -145,6 +155,14 @@ const db = {
   SprayingDailyLogs: SprayingDailyLogs(sequelize, DataTypes),
   AuditLog: AuditLog(sequelize, DataTypes),
   SprayingOrderComment: SprayingOrderComment(sequelize, DataTypes),
+
+  // Inventory dashboard models
+  InventoryAccessory: InventoryAccessory(sequelize, DataTypes),
+  InventoryDrone: InventoryDrone(sequelize, DataTypes),
+  InventoryShipment: InventoryShipment(sequelize, DataTypes),
+  MaintenanceLog: MaintenanceLog(sequelize, DataTypes),
+  PurchaseOrder: PurchaseOrder(sequelize, DataTypes),
+  Vendor: Vendor(sequelize, DataTypes), 
 };
 
 // Export a promise that resolves once all tables are synced.
@@ -152,10 +170,10 @@ const db = {
 export const syncPromise = sequelize
   .sync({ alter: false })
   .then(() => {
-    console.log('✅ All models were synchronized successfully.');
+    logger.info('✅ All models were synchronized successfully.');
   })
   .catch((err) => {
-    console.error('❌ Sync error', err);
+    logger.error('❌ Sync error', err);
     throw err;
   });
 
