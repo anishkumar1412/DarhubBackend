@@ -41,10 +41,15 @@ import inventoryRouter     from "./routes/inventoryRoutes.js";
 // ── Services / bootstrap ──────────────────────────────────────────
 import { verifyEmailConnection } from "./services/email.service.js";
 import { bootstrapSuperAdmin }   from "./bootstrap/superAdmin.bootstrap.js";
+import droneStatusRouter   from "./routes/droneStatus.routes.js";   // ← NEW
+
+// Pilot maintenance
+import pilotMaintenanceRouter from "./routes/pilotMaintenanceRoutes.js";
+
 
 const app  = express();
 const PORT = process.env.PORT || 5678;
-const HOST = "0.0.0.0";
+const HOST = "localhost";
 
 // ── Middlewares ───────────────────────────────────────────────────
 app.use(helmet());
@@ -123,6 +128,11 @@ app.use('/admin/user-roles', userRolesRouter);
 app.use('/inventory', inventoryRouter);
 
 app.use('/api/inventory', inventoryRouter);
+
+app.use('/api/inventory', droneStatusRouter);
+
+// Pilot maintenance task form
+app.use('/api/pilot/maintenance', pilotMaintenanceRouter);
 
 // ── Global error handler ──────────────────────────────────────────
 app.use((err, req, res, next) => {

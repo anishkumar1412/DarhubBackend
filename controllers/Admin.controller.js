@@ -1075,7 +1075,7 @@ export const filterUsers = async (req, res) => {
       const address = addresses.filter(a => a.user_id === user.id) || [];
       const role = roles.find(r => r.user_id === user.id) || {};
 
-      
+
 
       return {
         user_id: user.id,
@@ -1467,7 +1467,7 @@ export const createOrder = async (req, res) => {
       address,
     } = req.body;
 
-    if (!start_date  || !crop_type_id || !land_in_acers || !user_id) {
+    if (!start_date || !crop_type_id || !land_in_acers || !user_id) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -1477,6 +1477,31 @@ export const createOrder = async (req, res) => {
     });
     const createdOnIST = new Date(nowISTString);
 
+    // Calculate working days based on MasterWorkingDays logic
+    let calculatedNumOfDays = parseInt(num_of_days) || 1;
+    let calculatedEndDate = end_date || start_date;
+    
+    try {
+      const workingDayRecord = await db.MasterWorkingDays.findOne({
+        where: {
+          is_active: true,
+          min_acre: { [db.Op.lte]: parseFloat(land_in_acers) },
+          max_acre: { [db.Op.gte]: parseFloat(land_in_acers) },
+        }
+      });
+
+      if (workingDayRecord && workingDayRecord.working_days) {
+        calculatedNumOfDays = workingDayRecord.working_days;
+        
+        // Compute end_date by adding (working_days - 1) to start_date
+        const stDate = new Date(start_date);
+        stDate.setDate(stDate.getDate() + (calculatedNumOfDays - 1));
+        calculatedEndDate = stDate.toISOString().slice(0, 10);
+      }
+    } catch (err) {
+      console.error("Error calculating working days:", err);
+    }
+
     // Generate unique booking_id
     const bookingId = uuidv4();
 
@@ -1484,14 +1509,14 @@ export const createOrder = async (req, res) => {
     const order = await SprayingOrder.create({
       booking_id: bookingId,
       start_date,
-      end_date,
-      num_of_days,
+      end_date: calculatedEndDate,
+      num_of_days: calculatedNumOfDays,
       crop_type_id,
       land_in_acers,
       price,
       tax,
       total_price,
-      cupon_id:13,
+      cupon_id: 13,
       discount,
       user_id,
       order_status: "Pending",

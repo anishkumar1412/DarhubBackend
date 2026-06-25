@@ -334,8 +334,9 @@ export const getCalendarAvailability = async (req, res) => {
         ? Math.min(...dronesWithCrew.map((d) => d.acres_per_day))
         : 5;
     const globalEstimated =
-      booking.num_of_days ||
-      (landInAcres > 0 ? Math.ceil(landInAcres / minAcresPerDay) : 1);
+      landInAcres > 0
+        ? Math.ceil(landInAcres / minAcresPerDay)
+        : booking.num_of_days || 1;
 
     return res.status(200).json({
       success: true,

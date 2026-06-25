@@ -273,3 +273,201 @@ export const getMaintenanceStats = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
   }
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PILOT MAINTENANCE TASKS — Admin view
+// Shows all maintenance tasks submitted by pilots in the admin panel.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const {
+  PilotMaintenanceTask,
+  PilotMaintenanceChecklist,
+  PilotMaintenanceAttachment,
+  User,
+} = db;
+
+// ─── GET ALL PILOT MAINTENANCE TASKS (Admin) ─────────────────────────────────
+
+/**
+ * GET /api/inventory/pilot-maintenance-tasks
+ * Query: search, form_status, overall_status, maintenance_type, drone_id, pilot_id, page, limit
+ *
+ * Admin sees ALL pilots' submitted (and optionally draft) tasks.
+ */
+export const getAllPilotMaintenanceTasks = async (req, res) => {
+  try {
+    const {
+      search = '',
+      form_status = '',
+      overall_status = '',
+      maintenance_type = '',
+      drone_id = '',
+      pilot_id = '',
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const where = { is_active: true };
+    const andConditions = [];
+
+    if (search) {
+      andConditions.push({
+        [Op.or]: [
+          { task_ref: { [Op.like]: `%${search}%` } },
+          { drone_code: { [Op.like]: `%${search}%` } },
+          { drone_name: { [Op.like]: `%${search}%` } },
+          { drone_model: { [Op.like]: `%${search}%` } },
+        ],
+      });
+    }
+
+    if (form_status) andConditions.push({ form_status });
+    if (overall_status) andConditions.push({ overall_status });
+    if (maintenance_type) andConditions.push({ maintenance_type });
+    if (drone_id) andConditions.push({ drone_id: parseInt(drone_id) });
+    if (pilot_id) andConditions.push({ pilot_id: parseInt(pilot_id) });
+
+    if (andConditions.length) where[Op.and] = andConditions;
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const { count, rows } = await PilotMaintenanceTask.findAndCountAll({
+      where,
+      include: [
+        {
+          model: PilotMaintenanceChecklist,
+          as: 'checklist',
+          where: { is_active: true },
+          required: false,
+        },
+        {
+          model: PilotMaintenanceAttachment,
+          as: 'attachments',
+          where: { is_active: true },
+          required: false,
+        },
+        {
+          model: User,
+          as: 'pilotUser',
+          attributes: ['id', 'email', 'username'],
+        },
+        {
+          model: User,
+          as: 'engineerUser',
+          attributes: ['id', 'email', 'username'],
+        },
+      ],
+      order: [['created_on', 'DESC']],
+      limit: parseInt(limit),
+      offset,
+      distinct: true,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: rows,
+      total: count,
+      page: parseInt(page),
+      totalPages: Math.ceil(count / parseInt(limit)),
+    });
+  } catch (err) {
+    console.error('getAllPilotMaintenanceTasks error:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+  }
+};
+
+// ─── GET PILOT MAINTENANCE TASK BY ID (Admin) ────────────────────────────────
+
+/**
+ * GET /api/inventory/pilot-maintenance-tasks/:id
+ * Full task detail with checklist + attachments + pilot + engineer info.
+ */
+export const getPilotMaintenanceTaskById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const task = await PilotMaintenanceTask.findOne({
+      where: { id, is_active: true },
+      include: [
+        {
+          model: PilotMaintenanceChecklist,
+          as: 'checklist',
+          where: { is_active: true },
+          required: false,
+        },
+        {
+          model: PilotMaintenanceAttachment,
+          as: 'attachments',
+          where: { is_active: true },
+          required: false,
+        },
+        {
+          model: User,
+          as: 'pilotUser',
+          attributes: ['id', 'email', 'username'],
+        },
+        {
+          model: User,
+          as: 'engineerUser',
+          attributes: ['id', 'email', 'username'],
+        },
+      ],
+    });
+
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Pilot maintenance task not found.' });
+    }
+
+    return res.status(200).json({ success: true, data: task });
+  } catch (err) {
+    console.error('getPilotMaintenanceTaskById error:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+  }
+};
+
+// ─── PILOT MAINTENANCE STATS (Admin) ─────────────────────────────────────────
+
+/**
+ * GET /api/inventory/pilot-maintenance-tasks/stats
+ * Aggregated stats across ALL pilots for the admin dashboard.
+ */
+export const getPilotMaintenanceStats = async (req, res) => {
+  try {
+    const baseWhere = { is_active: true };
+
+    const [totalTasks, drafts, submitted, good, minorIssues, majorIssues, critical] =
+      await Promise.all([
+        PilotMaintenanceTask.count({ where: baseWhere }),
+        PilotMaintenanceTask.count({ where: { ...baseWhere, form_status: 'draft' } }),
+        PilotMaintenanceTask.count({ where: { ...baseWhere, form_status: 'submitted' } }),
+        PilotMaintenanceTask.count({ where: { ...baseWhere, overall_status: 'Good' } }),
+        PilotMaintenanceTask.count({ where: { ...baseWhere, overall_status: 'Minor Issues' } }),
+        PilotMaintenanceTask.count({ where: { ...baseWhere, overall_status: 'Major Issues' } }),
+        PilotMaintenanceTask.count({ where: { ...baseWhere, overall_status: 'Critical' } }),
+      ]);
+
+    const avgHealthScore = await PilotMaintenanceTask.findOne({
+      where: { ...baseWhere, form_status: 'submitted' },
+      attributes: [
+        [db.sequelize.fn('AVG', db.sequelize.col('health_score')), 'avg_score'],
+      ],
+      raw: true,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        totalTasks,
+        drafts,
+        submitted,
+        byStatus: { good, minorIssues, majorIssues, critical },
+        averageHealthScore: avgHealthScore?.avg_score
+          ? Math.round(parseFloat(avgHealthScore.avg_score))
+          : 0,
+      },
+    });
+  } catch (err) {
+    console.error('getPilotMaintenanceStats error:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+  }
+};

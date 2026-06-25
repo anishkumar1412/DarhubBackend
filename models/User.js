@@ -3,7 +3,7 @@ import sequelize from "./index.js"
 
 import AuditFields from './auditFields.js';
 
-const User  = (sequelize, DataTypes) => sequelize.define('User', {
+const User = (sequelize, DataTypes) => sequelize.define('User', {
   email: DataTypes.STRING,
   password: DataTypes.STRING,
   username: DataTypes.STRING,

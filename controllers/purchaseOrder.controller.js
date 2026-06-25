@@ -8,7 +8,7 @@
 
 import db from '../models/index.js';
 
-const { PurchaseOrder, MaintenanceLog, InventoryAccessory, Vendor, Op } = db;
+const { PurchaseOrder, MaintenanceLog, InventoryAccessory, Vendor, InventoryShipment, Op } = db;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -80,6 +80,25 @@ export const createPurchaseOrder = async (req, res) => {
         { where: { id: maintenance_log_id } }
       );
     }
+
+    // Auto-create a corresponding InventoryShipment for tracking in the "In Transit" tab
+    await InventoryShipment.create({
+      shipment_code: `TRK-${po_number}`,
+      shipment_type: 'PO Replenishment',
+      item_name: `${part_name} (Qty: ${order_quantity})`,
+      origin: vendor || 'Vendor Warehouse',
+      destination: target_hub || 'Main Hub',
+      dispatch_date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      estimated_arrival: 'Pending',
+      status: status === 'Pending' || status === 'Submitted' ? 'Order Placed' : status,
+      tracking_awb: 'Awaiting AWB',
+      courier_partner: 'TBD',
+      total_units: parseInt(order_quantity),
+      order_value: total_cost,
+      is_active: true,
+      created_on: new Date(),
+      created_by: req.user?.id || null,
+    });
 
     return res.status(201).json({ success: true, data: po, message: 'Purchase Order generated successfully.' });
   } catch (err) {

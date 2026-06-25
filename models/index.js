@@ -58,6 +58,12 @@ import InventoryShipment from './InventoryShipment.js';
 import MaintenanceLog from './MaintenanceLog.js';
 import PurchaseOrder from './PurchaseOrder.js';
 import Vendor from './Vendor.js';
+import SalesOrder from './SalesOrder.js';
+
+// ── Pilot maintenance models ─────────────────────────────────────
+import PilotMaintenanceTask from './PilotMaintenanceTask.js';
+import PilotMaintenanceChecklist from './PilotMaintenanceChecklist.js';
+import PilotMaintenanceAttachment from './PilotMaintenanceAttachment.js';
 
 // ── Initialize Sequelize ──────────────────────────────────────────
 const sequelize = new Sequelize(
@@ -162,8 +168,48 @@ const db = {
   InventoryShipment: InventoryShipment(sequelize, DataTypes),
   MaintenanceLog: MaintenanceLog(sequelize, DataTypes),
   PurchaseOrder: PurchaseOrder(sequelize, DataTypes),
-  Vendor: Vendor(sequelize, DataTypes), 
+  Vendor: Vendor(sequelize, DataTypes),
+  SalesOrder: SalesOrder(sequelize, DataTypes),
+
+  // Pilot maintenance models
+  PilotMaintenanceTask: PilotMaintenanceTask(sequelize, DataTypes),
+  PilotMaintenanceChecklist: PilotMaintenanceChecklist(sequelize, DataTypes),
+  PilotMaintenanceAttachment: PilotMaintenanceAttachment(sequelize, DataTypes),
 };
+
+// ── Pilot Maintenance Associations ────────────────────────────────
+db.PilotMaintenanceTask.hasMany(db.PilotMaintenanceChecklist, {
+  foreignKey: 'task_id',
+  as: 'checklist',
+});
+db.PilotMaintenanceChecklist.belongsTo(db.PilotMaintenanceTask, {
+  foreignKey: 'task_id',
+  as: 'task',
+});
+
+db.PilotMaintenanceTask.hasMany(db.PilotMaintenanceAttachment, {
+  foreignKey: 'task_id',
+  as: 'attachments',
+});
+db.PilotMaintenanceAttachment.belongsTo(db.PilotMaintenanceTask, {
+  foreignKey: 'task_id',
+  as: 'task',
+});
+
+db.PilotMaintenanceTask.belongsTo(db.Drone1, {
+  foreignKey: 'drone_id',
+  as: 'drone',
+});
+
+db.PilotMaintenanceTask.belongsTo(db.User, {
+  foreignKey: 'pilot_id',
+  as: 'pilotUser',
+});
+
+db.PilotMaintenanceTask.belongsTo(db.User, {
+  foreignKey: 'engineer_id',
+  as: 'engineerUser',
+});
 
 // Export a promise that resolves once all tables are synced.
 // server.js awaits this before running the super-admin bootstrap.

@@ -119,9 +119,13 @@ import {
   updateMaintenanceStatus,
   deleteMaintenanceLog,
   getMaintenanceStats,
+  getAllPilotMaintenanceTasks,
+  getPilotMaintenanceTaskById,
+  getPilotMaintenanceStats,
 } from "../controllers/maintainance.controller.js";
 
 import { getDashboardStats } from "../controllers/inventoryDashboard.controller.js";
+import { getDashboardSummary } from "../controllers/dashoboardSummary.controller.js";
 
 const router = express.Router();
 
@@ -179,4 +183,10 @@ router.put("/maintenance-logs/:id", updateMaintenanceLog);
 router.patch("/maintenance-logs/:id/status", updateMaintenanceStatus);
 router.delete("/maintenance-logs/:id", deleteMaintenanceLog);
 
+// ─── PILOT MAINTENANCE TASKS (Admin view) ─────────────────────────────────────
+router.get("/pilot-maintenance-tasks/stats", getPilotMaintenanceStats);
+router.get("/pilot-maintenance-tasks", getAllPilotMaintenanceTasks);
+router.get("/pilot-maintenance-tasks/:id", getPilotMaintenanceTaskById);
+
+router.get("/dashboard-summary", getDashboardSummary);
 export default router;
