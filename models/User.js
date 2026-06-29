@@ -10,6 +10,20 @@ const User  = (sequelize, DataTypes) => sequelize.define('User', {
   mobile_number: DataTypes.STRING,
   is_superuser: DataTypes.BOOLEAN,
   user_type: DataTypes.INTEGER,
+  isMobileVerify: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    allowNull: false
+  },
+  isEmailVerify: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    allowNull: false
+  },
+  user_ref_id: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
   ...AuditFields,
 }, {
   tableName: 'USER',

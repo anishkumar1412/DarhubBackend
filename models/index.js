@@ -43,6 +43,26 @@ import SprayingDailyLogs from './SprayingDailyLogs.js';
 import AuditLog from './AuditLog.js';
 import SprayingOrderComment from './SprayingOrderComment.js';
 import MasterWorkingDays from './MasterWorkingdays.js';
+import Fertilizer from './Fertilizer.js';
+import UserUpiDetails from './UserUpiDetails.js';
+import UserBankDetails from './UserBankDetails.js';
+import UserDocuments from './UserDocuments.js';
+import OtpVerification from './OtpVerification.js';
+
+// ── Inventory & Sales/Purchase Order models (NEW) ───────────────────
+import Category from './Category.js';
+import Product from './Product.js';
+import Supplier from './Supplier.js';
+import Customer from './Customer.js';
+import Warehouse from './Warehouse.js';
+import WarehouseLocation from './WarehouseLocation.js';
+import WarehouseAdditional from './WarehouseAdditional.js';
+import Stock from './Stock.js';
+import PurchaseOrder from './PurchaseOrder.js';
+import PurchaseOrderItem from './PurchaseOrderItem.js';
+import SalesOrder from './SalesOrder.js';
+import SalesOrderItem from './SalesOrderItem.js';
+import StockTransaction from './StockTransaction.js';
 
 // ── Admin auth models (NEW) ───────────────────────────────────────
 import AdminProfile from './AdminProfile.js';
@@ -145,6 +165,26 @@ const db = {
   SprayingDailyLogs: SprayingDailyLogs(sequelize, DataTypes),
   AuditLog: AuditLog(sequelize, DataTypes),
   SprayingOrderComment: SprayingOrderComment(sequelize, DataTypes),
+
+  // Inventory & Orders models
+  Category: Category(sequelize, DataTypes),
+  Product: Product(sequelize, DataTypes),
+  Supplier: Supplier(sequelize, DataTypes),
+  Customer: Customer(sequelize, DataTypes),
+  Warehouse: Warehouse(sequelize, DataTypes),
+  WarehouseLocation: WarehouseLocation(sequelize, DataTypes),
+  WarehouseAdditional: WarehouseAdditional(sequelize, DataTypes),
+  Stock: Stock(sequelize, DataTypes),
+  PurchaseOrder: PurchaseOrder(sequelize, DataTypes),
+  PurchaseOrderItem: PurchaseOrderItem(sequelize, DataTypes),
+  SalesOrder: SalesOrder(sequelize, DataTypes),
+  SalesOrderItem: SalesOrderItem(sequelize, DataTypes),
+  StockTransaction: StockTransaction(sequelize, DataTypes),
+  Fertilizer: Fertilizer(sequelize, DataTypes),
+  UserUpiDetails: UserUpiDetails(sequelize, DataTypes),
+  UserBankDetails: UserBankDetails(sequelize, DataTypes),
+  UserDocuments: UserDocuments(sequelize, DataTypes),
+  OtpVerification: OtpVerification(sequelize, DataTypes),
 };
 
 // Export a promise that resolves once all tables are synced.
