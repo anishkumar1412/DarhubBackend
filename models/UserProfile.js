@@ -41,6 +41,10 @@ const UserProfile = (sequelize, DataTypes) => sequelize.define('UserProfile', {
     type: DataTypes.STRING,
     allowNull: true   // optional
   },
+  dob: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
   ...AuditFields,
 }, {
   tableName: 'USER_PROFILE',

@@ -9,7 +9,7 @@ const UserAddress = (sequelize, DataTypes) => sequelize.define('UserAddress', {
     },
     lane_1: {
         type: DataTypes.STRING,
-        allowNull: false,
+        allowNull: true,
     },
     lane_2: {
         type: DataTypes.STRING,
@@ -17,23 +17,28 @@ const UserAddress = (sequelize, DataTypes) => sequelize.define('UserAddress', {
     },
     state: {
         type: DataTypes.INTEGER,
-        allowNull: false,
+        allowNull: true,
     },
     district: {
         type: DataTypes.INTEGER,
-        allowNull: false,
+        allowNull: true,
     },
     block: {
         type: DataTypes.INTEGER,
-        allowNull: false,
+        allowNull: true,
     },
     village: {
         type: DataTypes.STRING,
-        allowNull: false,
+        allowNull: true,
     },
     pincode: {
         type: DataTypes.STRING,
+        allowNull: true,
+    },
+    is_primary: {
+        type: DataTypes.BOOLEAN,
         allowNull: false,
+        defaultValue: false,
     },
     ...AuditFields,
 }, {

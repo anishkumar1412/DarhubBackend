@@ -12,10 +12,23 @@ cloudinary.v2.config({
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Convert buffer to stream and upload
-export const uploadToCloudinary = async (fileBuffer, folder = "users") => {
+export const uploadToCloudinary = async (fileBuffer, folder = "users", resourceType = "auto", originalName = null) => {
   return new Promise((resolve, reject) => {
+    const options = { 
+      folder, 
+      resource_type: resourceType,
+      type: "upload",
+      unique_filename: false,
+      use_filename: true
+    };
+    if (originalName) {
+      const ext = originalName.split('.').pop().toLowerCase();
+      const uniqueId = Math.random().toString(36).substring(2, 15) + "_" + Date.now();
+      options.public_id = `${uniqueId}.${ext}`;
+    }
+
     const stream = cloudinary.v2.uploader.upload_stream(
-      { folder },
+      options,
       (error, result) => {
         if (error) reject(error);
         else resolve(result);

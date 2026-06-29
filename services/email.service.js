@@ -79,3 +79,10 @@ export const sendPasswordResetEmail = (to, fullName, resetLink) =>
     subject: 'Password reset request — DARHUB Admin',
     html:    adminPasswordResetEmailTemplate(fullName, resetLink),
   });
+
+export const sendOtpEmail = (to, otp) =>
+  sendEmail({
+    to,
+    subject: 'DARHUB Verification OTP',
+    html: `<h3>Your DARHUB Verification OTP is: <strong>${otp}</strong></h3><p>This OTP is valid for 5 minutes.</p>`,
+  });
