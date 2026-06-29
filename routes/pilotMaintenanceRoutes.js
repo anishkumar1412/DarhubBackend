@@ -43,8 +43,8 @@ const router = express.Router();
 // All routes require pilot JWT authentication
 router.use(authenticate);
 
-// Multer middleware for file uploads (max 10 files, 10MB each)
-const uploadAttachments = upload.array('attachments', 10);
+// Multer middleware for file uploads (accepts any dynamically named fields)
+const uploadAttachments = upload.any();
 
 // ─── STATS (must be before /:id to avoid param collision) ─────────────────────
 router.get('/stats', getTaskStats);

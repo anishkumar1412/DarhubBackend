@@ -166,6 +166,16 @@ const MaintenanceLog = (sequelize, DataTypes) =>
         type: DataTypes.FLOAT,
         allowNull: true,
       },
+      sales_order_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        comment: 'Manual linkage to SalesOrder',
+      },
+      pilot_task_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        comment: 'Manual linkage to PilotMaintenanceTask',
+      },
 
       ...AuditFields,
     },

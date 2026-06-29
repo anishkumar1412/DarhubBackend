@@ -20,6 +20,7 @@ const {
   User,
   UserProfile,
   SalesOrder,
+  MaintenanceLog,
   Op,
   sequelize,
 } = db;
@@ -217,28 +218,12 @@ export const createMaintenanceTask = async (req, res) => {
     }));
     await PilotMaintenanceChecklist.bulkCreate(checklistRows, { transaction });
 
-    // Upload attachments to Cloudinary (if files present)
-    if (req.files && req.files.length > 0) {
-      const attachmentRows = [];
-      for (const file of req.files) {
-        const result = await uploadToCloudinary(file.buffer, 'pilot-maintenance');
-        attachmentRows.push({
-          task_id: task.id,
-          file_url: result.secure_url,
-          file_name: file.originalname,
-          file_size: file.size,
-          is_active: true,
-          created_on: new Date(),
-          created_by: pilotId,
-        });
-      }
-      await PilotMaintenanceAttachment.bulkCreate(attachmentRows, { transaction });
-    }
+    // Attachment processing moved below to associate with MaintenanceLog
 
-    // ── Create SalesOrder if Complaint Raised ──
+    // ── Create SalesOrder & MaintenanceLog if Complaint Raised ──
     if (String(req.body.raise_complaint).toLowerCase() === 'true') {
       const salesOrderNo = `SO-${Date.now()}`;
-      await SalesOrder.create(
+      const salesOrder = await SalesOrder.create(
         {
           sales_order_no: salesOrderNo,
           customer_id: pilotId,
@@ -252,6 +237,101 @@ export const createMaintenanceTask = async (req, res) => {
         },
         { transaction }
       );
+
+      const damagedItems = checklistItems.filter(item => item.actual_status !== 'Good' && item.actual_status !== 'Updated');
+
+      if (damagedItems.length > 0) {
+        for (let i = 0; i < damagedItems.length; i++) {
+          const item = damagedItems[i];
+          const maintenanceLog = await MaintenanceLog.create(
+            {
+              date: new Date().toISOString().slice(0, 10),
+              log_ref: `MNT-LOG-${Date.now()}-${i}`,
+              drone_code: task.drone_code,
+              drone_type: task.drone_model,
+              component: item.component,
+              reason: item.remarks || req.body.engineer_notes || `Damaged: ${item.component}`,
+              status: 'In Progress',
+              pilot: pilotId.toString(), // or pilot name if available
+              sales_order_id: salesOrder.id,
+              pilot_task_id: task.id,
+              is_active: true,
+              created_by: pilotId,
+              created_on: new Date(),
+            },
+            { transaction }
+          );
+          // Set linkage on SalesOrder to point to the *last* log
+          await salesOrder.update({ maintenance_log_id: maintenanceLog.id }, { transaction });
+
+          // ── Process Component-Specific Attachments ──
+          // Find the original index of this damaged item in checklistItems
+          const originalIndex = checklistItems.findIndex(ci => ci.component === item.component);
+          
+          if (req.files && req.files.length > 0 && originalIndex !== -1) {
+            const componentFiles = req.files.filter(f => f.fieldname === `attachments_${originalIndex}`);
+            const attachmentRows = [];
+            for (const file of componentFiles) {
+              const result = await uploadToCloudinary(file.buffer, 'pilot-maintenance');
+              attachmentRows.push({
+                task_id: task.id,
+                maintenance_log_id: maintenanceLog.id,
+                file_url: result.secure_url,
+                file_name: file.originalname,
+                file_size: file.size,
+                is_active: true,
+                created_on: new Date(),
+                created_by: pilotId,
+              });
+            }
+            if (attachmentRows.length > 0) {
+              await PilotMaintenanceAttachment.bulkCreate(attachmentRows, { transaction });
+            }
+          }
+        }
+      } else {
+        // Fallback: create one log if complaint raised but no checklist item marked damaged
+        const maintenanceLog = await MaintenanceLog.create(
+          {
+            date: new Date().toISOString().slice(0, 10),
+            log_ref: `MNT-LOG-${Date.now()}`,
+            drone_code: task.drone_code,
+            drone_type: task.drone_model,
+            reason: req.body.engineer_notes || 'Pilot Complaint Raised',
+            status: 'In Progress',
+            pilot: pilotId.toString(), // or pilot name if available
+            sales_order_id: salesOrder.id,
+            pilot_task_id: task.id,
+            is_active: true,
+            created_by: pilotId,
+            created_on: new Date(),
+          },
+          { transaction }
+        );
+        await salesOrder.update({ maintenance_log_id: maintenanceLog.id }, { transaction });
+      }
+    }
+
+    // Process any remaining "global" attachments (e.g. fieldname 'attachments')
+    if (req.files && req.files.length > 0) {
+      const globalFiles = req.files.filter(f => f.fieldname === 'attachments');
+      const attachmentRows = [];
+      for (const file of globalFiles) {
+        const result = await uploadToCloudinary(file.buffer, 'pilot-maintenance');
+        attachmentRows.push({
+          task_id: task.id,
+          maintenance_log_id: null,
+          file_url: result.secure_url,
+          file_name: file.originalname,
+          file_size: file.size,
+          is_active: true,
+          created_on: new Date(),
+          created_by: pilotId,
+        });
+      }
+      if (attachmentRows.length > 0) {
+        await PilotMaintenanceAttachment.bulkCreate(attachmentRows, { transaction });
+      }
     }
 
     await transaction.commit();

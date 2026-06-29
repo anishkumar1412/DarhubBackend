@@ -11,7 +11,7 @@
 
 import db from '../models/index.js';
 
-const { MaintenanceLog, Op } = db;
+const { MaintenanceLog, SalesOrder, PilotMaintenanceAttachment, PilotMaintenanceChecklist, Op } = db;
 
 // ─── CREATE ───────────────────────────────────────────────────────────────────
 
@@ -126,9 +126,61 @@ export const getAllMaintenanceLogs = async (req, res) => {
       offset,
     });
 
+    // ── Manual data fetching (no Sequelize associations) ──
+    const logIds = rows.map((r) => r.id);
+    const salesOrderIds = rows.map((r) => r.sales_order_id).filter(Boolean);
+    const pilotTaskIds = rows.map((r) => r.pilot_task_id).filter(Boolean);
+
+    let salesOrdersMap = {};
+    if (salesOrderIds.length > 0) {
+      const orders = await SalesOrder.findAll({ where: { id: salesOrderIds } });
+      orders.forEach((o) => { salesOrdersMap[o.id] = o; });
+    }
+
+    let attachmentsMap = {};
+    if (logIds.length > 0 || pilotTaskIds.length > 0) {
+      const attachments = await PilotMaintenanceAttachment.findAll({ 
+        where: { 
+          [Op.or]: [
+            { maintenance_log_id: { [Op.in]: logIds } },
+            { task_id: { [Op.in]: pilotTaskIds } }
+          ]
+        } 
+      });
+      attachments.forEach((a) => {
+        // Group by maintenance_log_id. If null, group by task_id as "global"
+        const key = a.maintenance_log_id ? `log_${a.maintenance_log_id}` : `task_${a.task_id}`;
+        if (!attachmentsMap[key]) attachmentsMap[key] = [];
+        attachmentsMap[key].push(a);
+      });
+    }
+
+    let checklistsMap = {};
+    if (pilotTaskIds.length > 0) {
+      const checklists = await PilotMaintenanceChecklist.findAll({ where: { task_id: pilotTaskIds } });
+      checklists.forEach((c) => {
+        if (!checklistsMap[c.task_id]) checklistsMap[c.task_id] = [];
+        checklistsMap[c.task_id].push(c);
+      });
+    }
+
+    // Map into final output
+    const mappedRows = rows.map((row) => {
+      const data = row.toJSON();
+      data.sales_order = data.sales_order_id ? (salesOrdersMap[data.sales_order_id] || null) : null;
+      
+      // Combine component-specific and global attachments
+      const specificAtts = attachmentsMap[`log_${row.id}`] || [];
+      const globalAtts = attachmentsMap[`task_${row.pilot_task_id}`] || [];
+      data.attachments = [...specificAtts, ...globalAtts];
+
+      data.checklist = data.pilot_task_id ? (checklistsMap[data.pilot_task_id] || []) : [];
+      return data;
+    });
+
     return res.status(200).json({
       success: true,
-      data: rows,
+      data: mappedRows,
       total: count,
       page: parseInt(page),
       totalPages: Math.ceil(count / parseInt(limit)),
@@ -148,9 +200,39 @@ export const getAllMaintenanceLogs = async (req, res) => {
 export const getMaintenanceLogById = async (req, res) => {
   try {
     const { id } = req.params;
-    const log = await MaintenanceLog.findOne({ where: { id, is_active: true } });
-    if (!log) return res.status(404).json({ success: false, message: 'Maintenance log not found.' });
-    return res.status(200).json({ success: true, data: log });
+    const log = await MaintenanceLog.findOne({
+      where: { id },
+    });
+
+    if (!log) {
+      return res.status(404).json({ success: false, message: 'Maintenance log not found.' });
+    }
+
+    const data = log.toJSON();
+
+    // Manual fetching of related data
+    if (data.sales_order_id) {
+      const salesOrder = await SalesOrder.findOne({ where: { id: data.sales_order_id } });
+      data.sales_order = salesOrder || null;
+    } else {
+      data.sales_order = null;
+    }
+
+    if (data.pilot_task_id) {
+      const allAttachments = await PilotMaintenanceAttachment.findAll({ where: { task_id: data.pilot_task_id } });
+      const specificAtts = allAttachments.filter(a => a.maintenance_log_id === data.id);
+      const globalAtts = allAttachments.filter(a => a.maintenance_log_id === null);
+      data.attachments = [...specificAtts, ...globalAtts];
+      data.checklist = await PilotMaintenanceChecklist.findAll({ where: { task_id: data.pilot_task_id } });
+    } else {
+      data.attachments = [];
+      data.checklist = [];
+    }
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
   } catch (err) {
     console.error('getMaintenanceLogById error:', err);
     return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
@@ -281,8 +363,6 @@ export const getMaintenanceStats = async (req, res) => {
 
 const {
   PilotMaintenanceTask,
-  PilotMaintenanceChecklist,
-  PilotMaintenanceAttachment,
   User,
 } = db;
 

@@ -16,6 +16,11 @@ const PilotMaintenanceAttachment = (sequelize, DataTypes) =>
         allowNull: false,
         comment: 'FK → PILOT_MAINTENANCE_TASK.id',
       },
+      maintenance_log_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        comment: 'FK → MAINTENANCE_LOG.id',
+      },
       file_url: {
         type: DataTypes.STRING(500),
         allowNull: false,

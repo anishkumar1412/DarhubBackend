@@ -20,6 +20,11 @@ const SalesOrder = (sequelize, DataTypes) =>
         allowNull: true,
         comment: 'FK to PilotMaintenanceTask if created from a maintenance form',
       },
+      maintenance_log_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        comment: 'Manual linkage to MaintenanceLog',
+      },
       order_date: {
         type: DataTypes.DATEONLY,
         allowNull: false,
