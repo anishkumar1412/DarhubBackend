@@ -6,6 +6,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import logger from './utils/logger.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -33,17 +37,39 @@ import privilegesRouter from "./routes/privilegesRoutes.js";
 import rolePrivilegesRouter from "./routes/rolePrivilegesRoutes.js";
 import userRolesRouter from "./routes/userRolesRoutes.js";
 
+// Inventory dashboard
+import inventoryRouter     from "./routes/inventoryRoutes.js";
+
 // ── Services / bootstrap ──────────────────────────────────────────
 import { verifyEmailConnection } from "./services/email.service.js";
+<<<<<<< HEAD
 import { bootstrapSuperAdmin } from "./bootstrap/superAdmin.bootstrap.js";
+=======
+import { bootstrapSuperAdmin }   from "./bootstrap/superAdmin.bootstrap.js";
+import droneStatusRouter   from "./routes/droneStatus.routes.js";   // ← NEW
+
+// Pilot maintenance
+import pilotMaintenanceRouter from "./routes/pilotMaintenanceRoutes.js";
+
+>>>>>>> 57db33b73037736565fcc0730ab667ce41a3bb86
 
 const app = express();
 const PORT = process.env.PORT || 5678;
-const HOST = "0.0.0.0";
+const HOST = "localhost";
 
 // ── Middlewares ───────────────────────────────────────────────────
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(helmet());
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// ── Rate Limiting ─────────────────────────────────────────────────
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP, please try again after 15 minutes',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 app.use(cors({
   origin: [
     "http://localhost:5173",
@@ -58,11 +84,20 @@ app.use(cors({
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Apply the rate limiter to all api routes
+app.use('/api', apiLimiter);
+app.use('/admin', apiLimiter);
+app.use('/order', apiLimiter);
+app.use('/crops', apiLimiter);
+app.use('/inventory', apiLimiter);
+
 // ── Swagger ───────────────────────────────────────────────────────
-const swaggerDocument = yaml.load(
-  fs.readFileSync(path.join(__dirname, 'swagger.yaml'), 'utf8')
-);
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+if (process.env.NODE_ENV !== 'production') {
+  const swaggerDocument = yaml.load(
+    fs.readFileSync(path.join(__dirname, 'swagger.yaml'), 'utf8')
+  );
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+}
 
 // ── Health ────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.send("Welcome to DARHUB Backend"));
@@ -97,19 +132,49 @@ app.use('/admin/role-privileges', rolePrivilegesRouter);
 // User ↔ Role assignments
 app.use('/admin/user-roles', userRolesRouter);
 
+// Inventory dashboard
+app.use('/inventory', inventoryRouter);
+
+app.use('/api/inventory', inventoryRouter);
+
+app.use('/api/inventory', droneStatusRouter);
+
+// Pilot maintenance task form
+app.use('/api/pilot/maintenance', pilotMaintenanceRouter);
+
 // ── Global error handler ──────────────────────────────────────────
 app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
+  
+  logger.error(`[${req.method}] ${req.url} - ${err.message}`, { stack: err.stack });
+
+  const isProduction = process.env.NODE_ENV === 'production';
   return res.status(statusCode).json({
+<<<<<<< HEAD
     success: false,
     message: err.message || 'Internal Server Error',
     errors: err.errors || [],
+=======
+    success:  false,
+    message:  isProduction && statusCode === 500 ? 'Internal Server Error' : err.message,
+    errors:   isProduction ? undefined : (err.errors || []),
+>>>>>>> 57db33b73037736565fcc0730ab667ce41a3bb86
   });
 });
 
+// ── Uncaught Exception / Rejection Handlers ───────────────────────
+process.on('uncaughtException', (err) => {
+  logger.error(`UNCAUGHT EXCEPTION: ${err.message}`, { stack: err.stack });
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error(`UNHANDLED REJECTION: ${reason}`);
+});
+
 // ── Start ─────────────────────────────────────────────────────────
-app.listen(PORT, HOST, async () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+const server = app.listen(PORT, HOST, async () => {
+  logger.info(`🚀 Server running on http://${HOST}:${PORT}`);
   await verifyEmailConnection();
   await syncPromise;
   try {
@@ -132,3 +197,16 @@ app.listen(PORT, HOST, async () => {
   }
   await bootstrapSuperAdmin();
 });
+
+// ── Graceful Shutdown ─────────────────────────────────────────────
+const shutdown = () => {
+  logger.info('SIGTERM/SIGINT received. Shutting down gracefully.');
+  server.close(() => {
+    logger.info('HTTP server closed.');
+    // db.sequelize.close() could be called here if db was imported
+    process.exit(0);
+  });
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
