@@ -183,17 +183,17 @@ export const getCalendarAvailability = async (req, res) => {
     const [droneUsers, droneProfiles] = await Promise.all([
       droneUserIds.length
         ? User.findAll({
-            where: { id: droneUserIds },
-            attributes: ["id", "username", "mobile_number"],
-            raw: true,
-          })
+          where: { id: droneUserIds },
+          attributes: ["id", "username", "mobile_number"],
+          raw: true,
+        })
         : Promise.resolve([]),
       droneUserIds.length
         ? UserProfile.findAll({
-            where: { user_id: droneUserIds },
-            attributes: ["user_id", "first_name", "last_name"],
-            raw: true,
-          })
+          where: { user_id: droneUserIds },
+          attributes: ["user_id", "first_name", "last_name"],
+          raw: true,
+        })
         : Promise.resolve([]),
     ]);
 
@@ -266,18 +266,18 @@ export const getCalendarAvailability = async (req, res) => {
       allNeededUserIds.length === droneUserIds.length
         ? droneUsers
         : await User.findAll({
-            where: { id: allNeededUserIds },
-            attributes: ["id", "username", "mobile_number"],
-            raw: true,
-          });
+          where: { id: allNeededUserIds },
+          attributes: ["id", "username", "mobile_number"],
+          raw: true,
+        });
     const allProfiles =
       allNeededUserIds.length === droneUserIds.length
         ? droneProfiles
         : await UserProfile.findAll({
-            where: { user_id: allNeededUserIds },
-            attributes: ["user_id", "first_name", "last_name"],
-            raw: true,
-          });
+          where: { user_id: allNeededUserIds },
+          attributes: ["user_id", "first_name", "last_name"],
+          raw: true,
+        });
 
     /* Build existing_assignments map */
     const existingAssignments = {};
@@ -394,21 +394,21 @@ export const assignWork = async (req, res) => {
 
       if (existing) {
         await existing.update({
-          drone_id:         drone_id,
-          pilot_user_id:    pilot    ?? existing.pilot_user_id,
-          co_pilot_user_id: copilot  ?? existing.co_pilot_user_id,
-          modified_on:      new Date(),
+          drone_id: drone_id,
+          pilot_user_id: pilot ?? existing.pilot_user_id,
+          co_pilot_user_id: copilot ?? existing.co_pilot_user_id,
+          modified_on: new Date(),
         });
         results.push({ date: toYMD(date), action: "updated" });
       } else {
         await SprayingDailyLogs.create({
           spraying_work_id: booking_id,
-          drone_id:         drone_id,
-          pilot_user_id:    pilot    || null,
-          co_pilot_user_id: copilot  || null,
-          working_date:     date,
-          created_on:       new Date(),
-          is_active:        true,
+          drone_id: drone_id,
+          pilot_user_id: pilot || null,
+          co_pilot_user_id: copilot || null,
+          working_date: date,
+          created_on: new Date(),
+          is_active: true,
         });
         results.push({ date: toYMD(date), action: "created" });
       }
@@ -417,9 +417,9 @@ export const assignWork = async (req, res) => {
     const order = await SprayingOrder.findOne({ where: { booking_id } });
     if (order) {
       const earliest = sortedDates[0];
-      const latest   = sortedDates[sortedDates.length - 1];
+      const latest = sortedDates[sortedDates.length - 1];
       await order.update({
-        end_date:    latest,
+        end_date: latest,
         num_of_days: sortedDates.length,
         ...(new Date(order.start_date) > earliest && {
           start_date: earliest,
@@ -432,10 +432,10 @@ export const assignWork = async (req, res) => {
     });
     const assigneePayload = {
       booking_id,
-      drone_id:         drone_id    || null,
-      pilot_user_id:    pilot       || null,
-      co_pilot_user_id: copilot     || null,
-      is_pilot_confirm:   false,
+      drone_id: drone_id || null,
+      pilot_user_id: pilot || null,
+      co_pilot_user_id: copilot || null,
+      is_pilot_confirm: false,
       is_copilot_confirm: false,
     };
     if (existingAssignee) {
@@ -447,7 +447,7 @@ export const assignWork = async (req, res) => {
       await SprayingWorkAssignee.create({
         ...assigneePayload,
         created_on: new Date(),
-        is_active:  true,
+        is_active: true,
       });
     }
 
@@ -489,39 +489,39 @@ export const updateDailyLogDrone = async (req, res) => {
 
     await log.update({
       drone_id,
-      pilot_user_id:    drone.pilot_user_id    ?? log.pilot_user_id,
+      pilot_user_id: drone.pilot_user_id ?? log.pilot_user_id,
       co_pilot_user_id: drone.co_pilot_user_id ?? log.co_pilot_user_id,
       modified_on: new Date(),
     });
 
     const crewIds = [
-      drone.pilot_user_id    ?? log.pilot_user_id,
+      drone.pilot_user_id ?? log.pilot_user_id,
       drone.co_pilot_user_id ?? log.co_pilot_user_id,
     ].filter(Boolean);
 
     const [users, profiles] = await Promise.all([
       crewIds.length
         ? User.findAll({
-            where: { id: crewIds },
-            attributes: ["id", "username", "mobile_number"],
-            raw: true,
-          })
+          where: { id: crewIds },
+          attributes: ["id", "username", "mobile_number"],
+          raw: true,
+        })
         : Promise.resolve([]),
       crewIds.length
         ? UserProfile.findAll({
-            where: { user_id: crewIds },
-            attributes: ["user_id", "first_name", "last_name"],
-            raw: true,
-          })
+          where: { user_id: crewIds },
+          attributes: ["user_id", "first_name", "last_name"],
+          raw: true,
+        })
         : Promise.resolve([]),
     ]);
 
     return res.status(200).json({
-      message:    "Drone updated for this working day",
-      log_id:     Number(log_id),
+      message: "Drone updated for this working day",
+      log_id: Number(log_id),
       drone_id,
       drone_name: drone.name || `Drone #${drone_id}`,
-      pilot:   resolveUser(drone.pilot_user_id    ?? log.pilot_user_id,    users, profiles),
+      pilot: resolveUser(drone.pilot_user_id ?? log.pilot_user_id, users, profiles),
       copilot: resolveUser(drone.co_pilot_user_id ?? log.co_pilot_user_id, users, profiles),
     });
   } catch (error) {
@@ -579,28 +579,152 @@ export const deleteDailyLog = async (req, res) => {
         /* All logs removed — reset counts but keep start_date */
         await order.update({
           num_of_days: 0,
-          end_date:    null,
+          end_date: null,
         });
       } else {
         const earliest = remainingLogs[0].working_date;
-        const latest   = remainingLogs[remainingLogs.length - 1].working_date;
+        const latest = remainingLogs[remainingLogs.length - 1].working_date;
         await order.update({
           num_of_days: remainingLogs.length,
-          start_date:  earliest,
-          end_date:    latest,
+          start_date: earliest,
+          end_date: latest,
         });
       }
     }
 
     return res.status(200).json({
-      message:      "Daily log deleted successfully",
-      log_id:       Number(log_id),
+      message: "Daily log deleted successfully",
+      log_id: Number(log_id),
       deleted_date: deletedDate,
       booking_id,
       remaining_days: remainingLogs.length,
     });
   } catch (error) {
     console.error("Error in deleteDailyLog:", error);
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const getDroneAvailabilityForBooking = async (req, res) => {
+  try {
+    const { state, district, block } = req.body;
+
+    if (!state || !district || !block) {
+      return res.status(400).json({ message: "state, district, and block are required" });
+    }
+
+    // 1. Drones registered in this block (by DroneAddress)
+    const localDroneAddrs = await DroneAddress.findAll({
+      where: { state, district, block, is_active: true },
+      attributes: ["drone_id"],
+      raw: true,
+    });
+
+    const localDroneIds = [...new Set(localDroneAddrs.map((a) => a.drone_id))];
+
+    if (localDroneIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        calendar_data: {},
+        total_drones: 0,
+        message: "No drones available in this location",
+      });
+    }
+
+    // 2. Fetch full drone records with pilot/copilot user IDs
+    const droneRecords = await Drone1.findAll({
+      where: { id: localDroneIds, is_active: true },
+      attributes: ["id", "name", "model", "acres_per_day", "pilot_user_id", "co_pilot_user_id"],
+      raw: true,
+    });
+
+    // 3. Batch-fetch all crew users in one query
+    const crewUserIds = [
+      ...new Set(
+        droneRecords.flatMap((d) =>
+          [d.pilot_user_id, d.co_pilot_user_id].filter(Boolean)
+        )
+      ),
+    ];
+
+    const [crewUsers, crewProfiles] = await Promise.all([
+      crewUserIds.length
+        ? User.findAll({
+          where: { id: crewUserIds },
+          attributes: ["id", "username", "mobile_number"],
+          raw: true,
+        })
+        : Promise.resolve([]),
+      crewUserIds.length
+        ? UserProfile.findAll({
+          where: { user_id: crewUserIds },
+          attributes: ["user_id", "first_name", "last_name"],
+          raw: true,
+        })
+        : Promise.resolve([]),
+    ]);
+
+    // Build enriched drone objects with pilot + copilot
+    const dronesWithCrew = droneRecords.map((d) => ({
+      id: d.id,
+      name: d.name || `Drone #${d.id}`,
+      model: d.model || null,
+      acres_per_day: d.acres_per_day || 5,
+      pilot: resolveUser(d.pilot_user_id, crewUsers, crewProfiles),
+      copilot: resolveUser(d.co_pilot_user_id, crewUsers, crewProfiles),
+    }));
+
+    // 4. Date window: today -> +30 days
+    const windowStart = new Date();
+    windowStart.setUTCHours(0, 0, 0, 0);
+    const windowEnd = new Date(windowStart);
+    windowEnd.setUTCDate(windowEnd.getUTCDate() + 30);
+
+    // 5. Busy drone logs in window
+    const busyLogs = await SprayingDailyLogs.findAll({
+      where: {
+        working_date: { [Op.between]: [windowStart, windowEnd] },
+        drone_id: { [Op.in]: localDroneIds },
+        is_active: true,
+      },
+      attributes: ["working_date", "drone_id"],
+      raw: true,
+    });
+
+    const busyDronesByDate = {};
+    busyLogs.forEach((log) => {
+      const ymd = toYMD(new Date(log.working_date));
+      if (!busyDronesByDate[ymd]) busyDronesByDate[ymd] = new Set();
+      busyDronesByDate[ymd].add(log.drone_id);
+    });
+
+    // 6. Build calendar_data — each date now includes the full available_drones list
+    //    so the frontend can show drone names + pilot/copilot for selection.
+    const calendar_data = {};
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(windowStart);
+      d.setUTCDate(d.getUTCDate() + i);
+      const ymd = toYMD(d);
+
+      const busyOnDate = busyDronesByDate[ymd] || new Set();
+      const availableDrones = dronesWithCrew.filter((dr) => !busyOnDate.has(dr.id));
+
+      calendar_data[ymd] = {
+        available_drones: availableDrones,          // full objects with pilot info
+        available_count: availableDrones.length,   // quick count for display
+        blocked: availableDrones.length === 0,
+        total_drones: dronesWithCrew.length,
+      };
+    }
+
+    return res.status(200).json({
+      success: true,
+      calendar_data,
+      total_drones: dronesWithCrew.length,
+    });
+
+  } catch (error) {
+    console.error("Error in getDroneAvailabilityForBooking:", error);
     return res.status(500).json({ error: error.message });
   }
 };

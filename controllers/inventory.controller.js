@@ -531,9 +531,26 @@ export const deleteMaintenanceLog = async (req, res) => {
 
 export const getMaintenanceLogById = async (req, res) => {
   try {
-    const item = await MaintenanceLog.findOne({ where: { id: req.params.id, is_active: true } });
+    const item = await MaintenanceLog.findOne({ 
+      where: { id: req.params.id, is_active: true },
+      include: [{
+        model: db.PilotMaintenanceTask,
+        as: 'pilot_task',
+        include: [{
+          model: db.PilotMaintenanceAttachment,
+          as: 'attachments'
+        }]
+      }]
+    });
     if (!item) return res.status(404).json({ success: false, message: "Maintenance log not found" });
-    return res.status(200).json({ success: true, data: item });
+    
+    // Map attachments for frontend if pilot_task exists
+    const data = item.toJSON();
+    if (data.pilot_task && data.pilot_task.attachments) {
+      data.attachments = data.pilot_task.attachments;
+    }
+    
+    return res.status(200).json({ success: true, data: data });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }
@@ -572,12 +589,29 @@ export const filterMaintenanceLogs = async (req, res) => {
       order: [[orderField, orderDir]],
       limit: Number(pageSize),
       offset,
+      include: [{
+        model: db.PilotMaintenanceTask,
+        as: 'pilot_task',
+        include: [{
+          model: db.PilotMaintenanceAttachment,
+          as: 'attachments'
+        }]
+      }]
+    });
+    
+    // Map attachments for frontend
+    const mappedRows = rows.map(row => {
+      const data = row.toJSON();
+      if (data.pilot_task && data.pilot_task.attachments) {
+        data.attachments = data.pilot_task.attachments;
+      }
+      return data;
     });
 
     return res.status(200).json({
       success: true, total: count, page: Number(page),
       pageSize: Number(pageSize), totalPages: Math.ceil(count / Number(pageSize)),
-      data: rows,
+      data: mappedRows,
     });
   } catch (error) {
     console.error("Error in filterMaintenanceLogs:", error);

@@ -1465,11 +1465,36 @@ export const createOrder = async (req, res) => {
       discount,
       user_id,
       address,
+      farmer_details // new field from frontend
     } = req.body;
 
-    if (!start_date || !crop_type_id || !land_in_acers || !user_id) {
+    let final_user_id = user_id;
+
+    // Auto-create or find user if user_id is missing but farmer_details is provided
+    if (!final_user_id && farmer_details && farmer_details.mobile) {
+      let existingUser = await db.User.findOne({ where: { mobile_number: farmer_details.mobile } });
+      if (!existingUser) {
+        const hashedPassword = await bcrypt.hash("12345678", 10);
+        existingUser = await db.User.create({
+          username: farmer_details.name || "Farmer",
+          mobile_number: farmer_details.mobile,
+          email: farmer_details.email || null,
+          user_type: 1, // Farmer
+          password: hashedPassword
+        });
+        await db.UserProfile.create({
+          user_id: existingUser.id,
+          first_name: farmer_details.name || "Farmer"
+        });
+      }
+      final_user_id = existingUser.id;
+    }
+
+    if (!start_date || !crop_type_id || !final_user_id) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+
+    const landAcres = land_in_acers || 0;
 
     // 🔥 IST TIME FIX
     const nowISTString = new Date().toLocaleString("en-US", {
@@ -1485,8 +1510,8 @@ export const createOrder = async (req, res) => {
       const workingDayRecord = await db.MasterWorkingDays.findOne({
         where: {
           is_active: true,
-          min_acre: { [db.Op.lte]: parseFloat(land_in_acers) },
-          max_acre: { [db.Op.gte]: parseFloat(land_in_acers) },
+          min_acre: { [db.Op.lte]: parseFloat(landAcres) },
+          max_acre: { [db.Op.gte]: parseFloat(landAcres) },
         }
       });
 
@@ -1505,6 +1530,8 @@ export const createOrder = async (req, res) => {
     // Generate unique booking_id
     const bookingId = uuidv4();
 
+    const bookingOtp = Math.floor(100000 + Math.random() * 900000).toString();
+
     // Create order
     const order = await SprayingOrder.create({
       booking_id: bookingId,
@@ -1512,22 +1539,23 @@ export const createOrder = async (req, res) => {
       end_date: calculatedEndDate,
       num_of_days: calculatedNumOfDays,
       crop_type_id,
-      land_in_acers,
+      land_in_acers: landAcres,
       price,
       tax,
       total_price,
       cupon_id: 13,
       discount,
-      user_id,
-      order_status: "Pending",
+      user_id: final_user_id,
+      order_status: "Pending OTP",
       is_paid: false,
       transcation_id: null,
+      booking_otp: bookingOtp,
 
       // 🔥 IST timestamp
       created_on: createdOnIST,
 
       // 🔥 IMPORTANT FIX
-      created_by: user_id,
+      created_by: final_user_id,
     });
 
     // Create order address
@@ -1598,9 +1626,37 @@ export const getUserByEmail = async (req, res) => {
       });
     }
 
+    const profile = await UserProfile.findOne({
+      where: { user_id: user.id },
+      attributes: ["first_name", "last_name"]
+    });
+
+    const userAddresses = await UserAddress.findAll({
+      where: { user_id: user.id, is_active: true },
+      raw: true
+    });
+
+    const addresses = await Promise.all(userAddresses.map(async (addr) => {
+      const [stateObj, districtObj, blockObj] = await Promise.all([
+        MasterState.findOne({ where: { id: addr.state }, attributes: ["state_name"], raw: true }),
+        MasterDistrict.findOne({ where: { id: addr.district }, attributes: ["district_name"], raw: true }),
+        MasterBlock.findOne({ where: { id: addr.block }, attributes: ["block_name"], raw: true }),
+      ]);
+      return {
+        ...addr,
+        state_name: stateObj?.state_name || null,
+        district_name: districtObj?.district_name || null,
+        block_name: blockObj?.block_name || null,
+      };
+    }));
+
     return res.status(200).json({
       message: "User fetched successfully",
-      user
+      user: {
+        ...user.dataValues,
+        profile: profile ? profile.dataValues : null,
+        addresses
+      }
     });
 
   } catch (error) {
@@ -1608,6 +1664,104 @@ export const getUserByEmail = async (req, res) => {
     return res.status(500).json({
       error: error.message
     });
+  }
+};
+
+export const addUserAddress = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+    const { lane_1, state, district, block, village, pincode } = req.body;
+
+    if (!user_id || !lane_1 || !state || !district || !block || !village || !pincode) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    const newAddress = await UserAddress.create({
+      user_id,
+      lane_1,
+      state,
+      district,
+      block,
+      village,
+      pincode,
+      is_active: true
+    });
+
+    const [stateObj, districtObj, blockObj] = await Promise.all([
+      MasterState.findOne({ where: { id: state }, attributes: ["state_name"], raw: true }),
+      MasterDistrict.findOne({ where: { id: district }, attributes: ["district_name"], raw: true }),
+      MasterBlock.findOne({ where: { id: block }, attributes: ["block_name"], raw: true }),
+    ]);
+
+    return res.status(201).json({
+      message: "Address created successfully",
+      address: {
+        ...newAddress.dataValues,
+        state_name: stateObj?.state_name || null,
+        district_name: districtObj?.district_name || null,
+        block_name: blockObj?.block_name || null,
+      }
+    });
+  } catch (error) {
+    console.error("ADD USER ADDRESS ERROR:", error);
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const verifyOrderOTP = async (req, res) => {
+  try {
+    const { booking_id, otp } = req.body;
+
+    if (!booking_id || !otp) {
+      return res.status(400).json({ message: "booking_id and otp are required" });
+    }
+
+    const order = await SprayingOrder.findOne({ where: { booking_id } });
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    if (order.booking_otp !== otp) {
+      return res.status(400).json({ message: "Invalid OTP" });
+    }
+
+    await order.update({
+      order_status: "Pending", // Change from "Pending OTP" to "Pending"
+      booking_otp: null
+    });
+
+    return res.status(200).json({ message: "OTP verified successfully, order created" });
+  } catch (error) {
+    console.error("VERIFY ORDER OTP ERROR:", error);
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const resendOrderOTP = async (req, res) => {
+  try {
+    const { booking_id } = req.body;
+
+    if (!booking_id) {
+      return res.status(400).json({ message: "booking_id is required" });
+    }
+
+    const order = await SprayingOrder.findOne({ where: { booking_id } });
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    await order.update({ booking_otp: newOtp });
+
+    // Normally send SMS here...
+
+    return res.status(200).json({ message: "OTP resent successfully" });
+  } catch (error) {
+    console.error("RESEND ORDER OTP ERROR:", error);
+    return res.status(500).json({ error: error.message });
   }
 };
 

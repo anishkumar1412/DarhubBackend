@@ -1,5 +1,5 @@
 import express from "express";
-import { deleteUser, loginUser, registerUser, updateUserProfile, filterUsers ,refreshAccessToken, getUserById, getUsersForBooking, getUserByEmail} from "../controllers/Admin.controller.js";
+import { deleteUser, loginUser, registerUser, updateUserProfile, filterUsers ,refreshAccessToken, getUserById, getUsersForBooking, getUserByEmail, addUserAddress} from "../controllers/Admin.controller.js";
 import { authenticate } from "../middleware/authMiddleware.js";
 import upload from "../middleware/upload.js";
 
@@ -25,5 +25,6 @@ userRouter.post("/filter", filterUsers);
 userRouter.get("/users/booking-list", getUsersForBooking);
 
 userRouter.get("/users/search", getUserByEmail);
+userRouter.post("/users/:user_id/address", addUserAddress);
 
 export default userRouter;

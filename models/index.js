@@ -177,7 +177,7 @@ const db = {
   PilotMaintenanceAttachment: PilotMaintenanceAttachment(sequelize, DataTypes),
 };
 
-// ── Pilot Maintenance Associations ────────────────────────────────
+// 🪛 Pilot Maintenance Associations 🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛
 db.PilotMaintenanceTask.hasMany(db.PilotMaintenanceChecklist, {
   foreignKey: 'task_id',
   as: 'checklist',
@@ -194,6 +194,15 @@ db.PilotMaintenanceTask.hasMany(db.PilotMaintenanceAttachment, {
 db.PilotMaintenanceAttachment.belongsTo(db.PilotMaintenanceTask, {
   foreignKey: 'task_id',
   as: 'task',
+});
+
+db.MaintenanceLog.belongsTo(db.PilotMaintenanceTask, {
+  foreignKey: 'pilot_task_id',
+  as: 'pilot_task',
+});
+db.PilotMaintenanceTask.hasOne(db.MaintenanceLog, {
+  foreignKey: 'pilot_task_id',
+  as: 'maintenance_log',
 });
 
 db.PilotMaintenanceTask.belongsTo(db.Drone1, {

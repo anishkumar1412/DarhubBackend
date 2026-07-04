@@ -22,6 +22,7 @@ const SprayingOrder = (sequelize, DataTypes) => sequelize.define('SprayingOrder'
   order_status: DataTypes.STRING,
   is_paid: DataTypes.BOOLEAN,
   transcation_id: DataTypes.STRING,
+  booking_otp: DataTypes.STRING,
   ...AuditFields,
 }, {
   tableName: 'SPRAYING_ORDER',
