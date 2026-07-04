@@ -44,6 +44,26 @@ import SprayingDailyLogs from './SprayingDailyLogs.js';
 import AuditLog from './AuditLog.js';
 import SprayingOrderComment from './SprayingOrderComment.js';
 import MasterWorkingDays from './MasterWorkingdays.js';
+import Fertilizer from './Fertilizer.js';
+import UserUpiDetails from './UserUpiDetails.js';
+import UserBankDetails from './UserBankDetails.js';
+import UserDocuments from './UserDocuments.js';
+import OtpVerification from './OtpVerification.js';
+
+// ── Inventory & Sales/Purchase Order models (NEW) ───────────────────
+import Category from './Category.js';
+import Product from './Product.js';
+import Supplier from './Supplier.js';
+import Customer from './Customer.js';
+import Warehouse from './Warehouse.js';
+import WarehouseLocation from './WarehouseLocation.js';
+import WarehouseAdditional from './WarehouseAdditional.js';
+import Stock from './Stock.js';
+import PurchaseOrder from './PurchaseOrder.js';
+import PurchaseOrderItem from './PurchaseOrderItem.js';
+import SalesOrder from './SalesOrder.js';
+import SalesOrderItem from './SalesOrderItem.js';
+import StockTransaction from './StockTransaction.js';
 
 // ── Admin auth models (NEW) ───────────────────────────────────────
 import AdminProfile from './AdminProfile.js';
@@ -162,6 +182,27 @@ const db = {
   AuditLog: AuditLog(sequelize, DataTypes),
   SprayingOrderComment: SprayingOrderComment(sequelize, DataTypes),
 
+<<<<<<< HEAD
+  // Inventory & Orders models
+  Category: Category(sequelize, DataTypes),
+  Product: Product(sequelize, DataTypes),
+  Supplier: Supplier(sequelize, DataTypes),
+  Customer: Customer(sequelize, DataTypes),
+  Warehouse: Warehouse(sequelize, DataTypes),
+  WarehouseLocation: WarehouseLocation(sequelize, DataTypes),
+  WarehouseAdditional: WarehouseAdditional(sequelize, DataTypes),
+  Stock: Stock(sequelize, DataTypes),
+  PurchaseOrder: PurchaseOrder(sequelize, DataTypes),
+  PurchaseOrderItem: PurchaseOrderItem(sequelize, DataTypes),
+  SalesOrder: SalesOrder(sequelize, DataTypes),
+  SalesOrderItem: SalesOrderItem(sequelize, DataTypes),
+  StockTransaction: StockTransaction(sequelize, DataTypes),
+  Fertilizer: Fertilizer(sequelize, DataTypes),
+  UserUpiDetails: UserUpiDetails(sequelize, DataTypes),
+  UserBankDetails: UserBankDetails(sequelize, DataTypes),
+  UserDocuments: UserDocuments(sequelize, DataTypes),
+  OtpVerification: OtpVerification(sequelize, DataTypes),
+=======
   // Inventory dashboard models
   InventoryAccessory: InventoryAccessory(sequelize, DataTypes),
   InventoryDrone: InventoryDrone(sequelize, DataTypes),
@@ -175,6 +216,7 @@ const db = {
   PilotMaintenanceTask: PilotMaintenanceTask(sequelize, DataTypes),
   PilotMaintenanceChecklist: PilotMaintenanceChecklist(sequelize, DataTypes),
   PilotMaintenanceAttachment: PilotMaintenanceAttachment(sequelize, DataTypes),
+>>>>>>> 57db33b73037736565fcc0730ab667ce41a3bb86
 };
 
 // 🪛 Pilot Maintenance Associations 🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛

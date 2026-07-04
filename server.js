@@ -11,7 +11,7 @@ import rateLimit from 'express-rate-limit';
 import logger from './utils/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
+const __dirname = path.dirname(__filename);
 
 // ── Models ────────────────────────────────────────────────────────
 // dotenv is loaded inside config/env.js using an absolute path,
@@ -20,34 +20,40 @@ const __dirname  = path.dirname(__filename);
 import db, { syncPromise } from './models/index.js';
 
 // ── Route imports ─────────────────────────────────────────────────
-import router              from "./routes/adminRoutes.js";
-import userRouter          from "./routes/user.routes.js";
-import locationRoutes      from "./routes/locationRoutes.js";
-import orderRouter         from "./routes/orderRoutes.js";
-import cropRouter          from "./routes/cropRoutes.js";
-import workingDaysRouter   from "./routes/workingDaysRoutes.js";
+import router from "./routes/adminRoutes.js";
+import userRouter from "./routes/user.routes.js";
+import locationRoutes from "./routes/locationRoutes.js";
+import orderRouter from "./routes/orderRoutes.js";
+import cropRouter from "./routes/cropRoutes.js";
+import workingDaysRouter from "./routes/workingDaysRoutes.js";
+import fertilizerRouter from "./routes/fertilizerRoutes.js";
+import warehouseRouter from "./routes/warehouseRoutes.js";
 
 // Admin auth + management
-import adminAuthRouter     from "./routes/adminAuthRoutes.js";
-import adminAccountRouter  from "./routes/adminAccountRoutes.js";
-import rolesRouter         from "./routes/rolesRoutes.js";
-import privilegesRouter    from "./routes/privilegesRoutes.js";
+import adminAuthRouter from "./routes/adminAuthRoutes.js";
+import adminAccountRouter from "./routes/adminAccountRoutes.js";
+import rolesRouter from "./routes/rolesRoutes.js";
+import privilegesRouter from "./routes/privilegesRoutes.js";
 import rolePrivilegesRouter from "./routes/rolePrivilegesRoutes.js";
-import userRolesRouter     from "./routes/userRolesRoutes.js";
+import userRolesRouter from "./routes/userRolesRoutes.js";
 
 // Inventory dashboard
 import inventoryRouter     from "./routes/inventoryRoutes.js";
 
 // ── Services / bootstrap ──────────────────────────────────────────
 import { verifyEmailConnection } from "./services/email.service.js";
+<<<<<<< HEAD
+import { bootstrapSuperAdmin } from "./bootstrap/superAdmin.bootstrap.js";
+=======
 import { bootstrapSuperAdmin }   from "./bootstrap/superAdmin.bootstrap.js";
 import droneStatusRouter   from "./routes/droneStatus.routes.js";   // ← NEW
 
 // Pilot maintenance
 import pilotMaintenanceRouter from "./routes/pilotMaintenanceRoutes.js";
 
+>>>>>>> 57db33b73037736565fcc0730ab667ce41a3bb86
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 5678;
 const HOST = "localhost";
 
@@ -99,12 +105,14 @@ app.get("/", (req, res) => res.send("Welcome to DARHUB Backend"));
 // ── Routes ────────────────────────────────────────────────────────
 
 // Existing routes
-app.use('/admin',         router);
-app.use('/api',           userRouter);
+app.use('/admin', router);
+app.use('/api', userRouter);
 app.use('/api/locations', locationRoutes);
-app.use('/order',         orderRouter);
-app.use('/crops',         cropRouter);
-app.use('/working-days',  workingDaysRouter);
+app.use('/order', orderRouter);
+app.use('/crops', cropRouter);
+app.use('/working-days', workingDaysRouter);
+app.use('/api/fertilizers', fertilizerRouter);
+app.use('/api/warehouses', warehouseRouter);
 
 // Admin auth (login, setup-password, forgot-password, reset-password, me, create-admin)
 app.use('/admin/auth', adminAuthRouter);
@@ -142,9 +150,15 @@ app.use((err, req, res, next) => {
 
   const isProduction = process.env.NODE_ENV === 'production';
   return res.status(statusCode).json({
+<<<<<<< HEAD
+    success: false,
+    message: err.message || 'Internal Server Error',
+    errors: err.errors || [],
+=======
     success:  false,
     message:  isProduction && statusCode === 500 ? 'Internal Server Error' : err.message,
     errors:   isProduction ? undefined : (err.errors || []),
+>>>>>>> 57db33b73037736565fcc0730ab667ce41a3bb86
   });
 });
 
@@ -163,6 +177,24 @@ const server = app.listen(PORT, HOST, async () => {
   logger.info(`🚀 Server running on http://${HOST}:${PORT}`);
   await verifyEmailConnection();
   await syncPromise;
+  try {
+    await db.Fertilizer.sync({ alter: true });
+    console.log("✅ Fertilizer table synchronized successfully.");
+    await db.Warehouse.sync({ alter: true });
+    await db.WarehouseLocation.sync({ alter: true });
+    await db.WarehouseAdditional.sync({ alter: true });
+    console.log("✅ Warehouse, WarehouseLocation, and WarehouseAdditional tables synchronized successfully.");
+    await db.User.sync({ alter: true });
+    await db.UserProfile.sync({ alter: true });
+    await db.UserAddress.sync({ alter: true });
+    await db.UserUpiDetails.sync({ alter: true });
+    await db.UserBankDetails.sync({ alter: true });
+    await db.UserDocuments.sync({ alter: true });
+    await db.OtpVerification.sync({ alter: true });
+    console.log("✅ User profile, address, bank, UPI, Document, and OTP verification tables synchronized successfully.");
+  } catch (syncErr) {
+    console.error("❌ Failed to synchronize database tables:", syncErr);
+  }
   await bootstrapSuperAdmin();
 });
 

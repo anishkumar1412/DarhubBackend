@@ -3,6 +3,8 @@ import jwt from "jsonwebtoken";
 import db from "../models/index.js";
 import { v4 as uuidv4 } from "uuid";
 import multer from "multer";
+import { uploadToCloudinary } from "../middleware/upload.js";
+import { sendOtpEmail } from "../services/email.service.js";
 
 
 
@@ -18,7 +20,8 @@ const {
   SprayingOrder,
   SprayingOrderAddress,
   SprayingDailyLogs,
-  SprayingWorkAssignee
+  SprayingWorkAssignee,
+  OtpVerification
 } = db;
 
 
@@ -146,6 +149,21 @@ const {
 
 export const registerUser = async (req, res) => {
   try {
+    // -------------------------------------------------------------
+    // Optional Authenticated User Check (Creator ID)
+    // -------------------------------------------------------------
+    let creatorId = null;
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.split(" ")[1];
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        creatorId = decoded.id || decoded.userId;
+      } catch (err) {
+        return res.status(401).json({ message: "Invalid or expired token." });
+      }
+    }
+
     // -----------------------------
     // 1. Parse ADDRESSES from FormData
     // -----------------------------
@@ -194,12 +212,50 @@ export const registerUser = async (req, res) => {
     }
 
     // -----------------------------
-    // 4. Check existing user
+    // 4. Validations & Duplication check
     // -----------------------------
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) {
+    if (!email || !email.trim()) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+    if (!mobile_number) {
+      return res.status(400).json({ message: "Mobile number is required" });
+    }
+
+    const emailStr = email.trim();
+    const mobileStr = String(mobile_number).trim();
+
+    if (emailStr.toLowerCase() === mobileStr.toLowerCase()) {
+      return res.status(400).json({ message: "Mobile number and email cannot be the same" });
+    }
+
+    // OTP verification check
+    const verifiedRecord = await OtpVerification.findOne({
+      where: {
+        email: emailStr,
+        mobile_number: mobileStr,
+        is_email_verified: true,
+        is_mobile_verified: true,
+        [db.Sequelize.Op.or]: [
+          { modified_on: { [db.Sequelize.Op.gte]: new Date(Date.now() - 30 * 60 * 1000) } },
+          { updatedAt: { [db.Sequelize.Op.gte]: new Date(Date.now() - 30 * 60 * 1000) } }
+        ]
+      }
+    });
+    if (!verifiedRecord) {
+      return res.status(400).json({ message: "Email or mobile number is not verified. Please verify using OTP first." });
+    }
+
+    const existingUserByEmail = await User.findOne({ where: { email: emailStr } });
+    if (existingUserByEmail) {
       return res.status(400).json({
         message: "User already exists with this email",
+      });
+    }
+
+    const existingUserByMobile = await User.findOne({ where: { mobile_number: mobileStr } });
+    if (existingUserByMobile) {
+      return res.status(400).json({
+        message: "User already exists with this mobile number",
       });
     }
 
@@ -215,15 +271,22 @@ export const registerUser = async (req, res) => {
       // Create main User
       const newUser = await User.create(
         {
-          email,
+          email: emailStr,
           password: hashedPassword,
           username,
-          mobile_number,
+          mobile_number: mobileStr,
           is_superuser: false,
           user_type: 1,
+          created_by: creatorId || null
         },
         { transaction: t }
       );
+
+      const finalCreatorId = creatorId || newUser.id;
+
+      if (!creatorId) {
+        await newUser.update({ created_by: finalCreatorId }, { transaction: t });
+      }
 
       // Create Address Records
       const formattedAddresses = addresses.map((address) => ({
@@ -235,6 +298,7 @@ export const registerUser = async (req, res) => {
         block: address.block,
         village: address.village,
         pincode: address.pincode,
+        created_by: finalCreatorId
       }));
 
       await UserAddress.bulkCreate(formattedAddresses, {
@@ -250,8 +314,9 @@ export const registerUser = async (req, res) => {
           whatsapp_number,
           user_image_original_filename,
           user_image_url,
-          aadhar_number,
-          pan_card_number,
+          aadhar_number: aadhar_number ? String(aadhar_number).trim() : null,
+          pan_card_number: pan_card_number ? String(pan_card_number).trim() : null,
+          created_by: finalCreatorId
         },
         { transaction: t }
       );
@@ -261,6 +326,7 @@ export const registerUser = async (req, res) => {
         {
           user_id: newUser.id,
           role_privilage_id,
+          created_by: finalCreatorId
         },
         { transaction: t }
       );
@@ -2474,5 +2540,1428 @@ export const assignWork = async (req, res) => {
   } catch (error) {
     console.error("Error assigning work:", error);
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const registerPilot = async (req, res) => {
+  try {
+    // -------------------------------------------------------------
+    // Optional Authenticated User Check (Creator ID)
+    // -------------------------------------------------------------
+    let creatorId = null;
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.split(" ")[1];
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        creatorId = decoded.id || decoded.userId;
+      } catch (err) {
+        return res.status(401).json({ success: false, error: "Invalid or expired token." });
+      }
+    }
+
+    const body = req.body || {};
+    const {
+      first_name,
+      last_name,
+      mobile_number,
+      dob,
+      email,
+      password,
+      role, // expected to be 2
+      upi_id,
+      aadhar_number,
+      pan_card_number,
+      isverifyEmail,
+      isMobileVerify
+    } = body;
+
+    // -------------------------------------------------------------
+    // 1. Validations
+    // -------------------------------------------------------------
+    if (!first_name || !first_name.trim()) {
+      return res.status(400).json({ success: false, error: "First name is required" });
+    }
+    if (!last_name || !last_name.trim()) {
+      return res.status(400).json({ success: false, error: "Last name is required" });
+    }
+    if (!email || !email.trim()) {
+      return res.status(400).json({ success: false, error: "Email is required" });
+    }
+    if (!password || !password.trim()) {
+      return res.status(400).json({ success: false, error: "Password is required" });
+    }
+    if (!mobile_number) {
+      return res.status(400).json({ success: false, error: "Mobile number is required" });
+    }
+
+    // Mobile validation: 10 digits
+    const mobileStr = String(mobile_number).trim();
+    if (!/^\d{10}$/.test(mobileStr)) {
+      return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
+    }
+
+    // Email regex validation with @ and .com
+    const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
+    }
+
+    if (email.trim().toLowerCase() === mobileStr.toLowerCase()) {
+      return res.status(400).json({ success: false, error: "Mobile number and email cannot be the same" });
+    }
+
+    const isEmailVerified = isverifyEmail === true || isverifyEmail === 'true';
+    const isMobileVerified = isMobileVerify === true || isMobileVerify === 'true';
+
+    if (!isEmailVerified && !isMobileVerified) {
+      return res.status(400).json({ success: false, error: "At least email or mobile verification must be completed first." });
+    }
+
+    // UPI ID regex validation
+    if (upi_id) {
+      const upiRegex = /^[\w.-]+@[\w.-]+$/;
+      if (!upiRegex.test(upi_id.trim())) {
+        return res.status(400).json({ success: false, error: "Invalid UPI ID format" });
+      }
+    }
+
+    // Dynamically lookup the Pilot role in the database
+    const pilotRole = await db.MasterRole.findOne({
+      where: {
+        role_name: { [db.Sequelize.Op.iLike]: 'Pilot' }
+      }
+    });
+    if (!pilotRole) {
+      return res.status(400).json({ success: false, error: "Role validation failed: 'Pilot' role is not configured in the database" });
+    }
+
+    // Check duplication: email and mobile number checks
+    const existingUserByEmail = await User.findOne({ where: { email: email.trim() } });
+    if (existingUserByEmail) {
+      return res.status(400).json({ success: false, error: "User already exists with this email" });
+    }
+
+    const existingUserByMobile = await User.findOne({ where: { mobile_number: mobileStr } });
+    if (existingUserByMobile) {
+      return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
+    }
+
+    // Parse bank_details & address (handling both JSON string and raw body properties)
+    let parsedBankDetails = [];
+    if (body.bank_details) {
+      try {
+        const parsed = JSON.parse(body.bank_details);
+        parsedBankDetails = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e) {
+        // Fallback for form fields
+        parsedBankDetails = [{
+          bank_name: body.bank_name,
+          acc_holder_name: body.acc_holder_name,
+          acc_number: body.acc_number,
+          ifsc_code: body.ifsc_code,
+          is_primary: body.is_primary === 'true' || body.is_primary === true
+        }];
+      }
+    } else if (body.bank_name) {
+      parsedBankDetails = [{
+        bank_name: body.bank_name,
+        acc_holder_name: body.acc_holder_name,
+        acc_number: body.acc_number,
+        ifsc_code: body.ifsc_code,
+        is_primary: body.is_primary === 'true' || body.is_primary === true
+      }];
+    }
+
+    let parsedAddress = [];
+    if (body.address) {
+      try {
+        const parsed = JSON.parse(body.address);
+        parsedAddress = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e) {
+        parsedAddress = [{
+          state: body.state,
+          district: body.district,
+          block: body.block,
+          lane1: body.lane1 || body.lane_1,
+          lane2: body.lane2 || body.lane_2,
+          village: body.village,
+          pincode: body.pincode,
+          is_primary: body.is_primary === 'true' || body.is_primary === true
+        }];
+      }
+    } else if (body.state || body.lane1 || body.lane_1 || body.pincode || body.district) {
+      parsedAddress = [{
+        state: body.state,
+        district: body.district,
+        block: body.block,
+        lane1: body.lane1 || body.lane_1,
+        lane2: body.lane2 || body.lane_2,
+        village: body.village,
+        pincode: body.pincode,
+        is_primary: body.is_primary === 'true' || body.is_primary === true
+      }];
+    }
+
+    // -------------------------------------------------------------
+    // 2. Validate and upload file fields
+    // -------------------------------------------------------------
+    const validateFile = (file, allowedTypes, label) => {
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) {
+        throw new Error(`${label} file exceeds the 5MB size limit.`);
+      }
+      const ext = file.originalname.split('.').pop().toLowerCase();
+      const mime = file.mimetype;
+      const isValid = allowedTypes.includes(ext) || allowedTypes.some(type => mime.includes(type));
+      if (!isValid) {
+        throw new Error(`${label} has an invalid format. Allowed: ${allowedTypes.join(', ')}`);
+      }
+    };
+
+    const fileFields = [
+      { key: 'profile_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Profile photo', docType: 5 },
+      { key: 'aaddhar_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Aadhar Card', docType: 10 },
+      { key: 'pan_card_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Pan Card', docType: 15 },
+      { key: 'dcga_pilot_cert', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI Pilot Cert', docType: 20 },
+      { key: 'dcga_pilot_license', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI License', docType: 25 },
+      { key: 'medical_certificate', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Medical Cert', docType: 30 },
+      { key: 'insurance_doc', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Insurance Doc', docType: 35 },
+      { key: 'passbook_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Passbook photo', isBank: true }
+    ];
+
+    const uploadedFilesData = {};
+    for (const field of fileFields) {
+      const fileArray = req.files && req.files[field.key];
+      if (fileArray && fileArray.length > 0) {
+        uploadedFilesData[field.key] = [];
+        for (const file of fileArray) {
+          // Validate size and extensions
+          validateFile(file, field.allowed, field.label);
+          // Detect if it is a PDF to use the "raw" resource type
+          const ext = file.originalname.split('.').pop().toLowerCase();
+          const resourceType = (ext === 'pdf') ? 'raw' : 'auto';
+          // Upload to Cloudinary
+          const result = await uploadToCloudinary(file.buffer, "pilots", resourceType, file.originalname);
+          uploadedFilesData[field.key].push({
+            original_name: file.originalname,
+            new_name: result.public_id,
+            url: result.secure_url
+          });
+        }
+      }
+    }
+
+    // -------------------------------------------------------------
+    // 3. Password hashing
+    // -------------------------------------------------------------
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const parseDOB = (dobStr) => {
+      if (!dobStr) return null;
+      const parts = dobStr.split('/');
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        return new Date(year, month, day);
+      }
+      return new Date(dobStr);
+    };
+
+    // -------------------------------------------------------------
+    // 4. Save using Sequelize Transaction
+    // -------------------------------------------------------------
+    const registeredUser = await db.sequelize.transaction(async (t) => {
+      // a. Create User record
+      const newUser = await User.create({
+        email: email.trim(),
+        password: hashedPassword,
+        username: `${first_name.trim()}_${last_name.trim()}_${Date.now()}`.substring(0, 50),
+        mobile_number: mobileStr,
+        is_superuser: false,
+        user_type: 2, // 2 = Pilot / User type 2
+        isMobileVerify: isMobileVerified,
+        isEmailVerify: isEmailVerified,
+        created_by: creatorId || null
+      }, { transaction: t });
+
+      const finalCreatorId = creatorId || newUser.id;
+
+      const userRefId = `PIL-${String(newUser.id).padStart(5, '0')}`;
+      const updates = { user_ref_id: userRefId };
+      if (!creatorId) {
+        updates.created_by = finalCreatorId;
+      }
+      await newUser.update(updates, { transaction: t });
+
+      // b. Assign Role in USER_ROLE
+      await UserRole.create({
+        user_id: newUser.id,
+        role_id: pilotRole.id,
+        created_by: finalCreatorId
+      }, { transaction: t });
+
+      // c. Create User Profile
+      await UserProfile.create({
+        user_id: newUser.id,
+        first_name: first_name.trim(),
+        last_name: last_name.trim(),
+        whatsapp_number: mobileStr,
+        dob: parseDOB(dob),
+        aadhar_number: aadhar_number ? String(aadhar_number).trim() : null,
+        pan_card_number: pan_card_number ? String(pan_card_number).trim() : null,
+        user_image_original_filename: uploadedFilesData['profile_image']?.[0]?.original_name || null,
+        user_image_new_filename: uploadedFilesData['profile_image']?.[0]?.new_name || null,
+        user_image_url: uploadedFilesData['profile_image']?.[0]?.url || null,
+        created_by: finalCreatorId
+      }, { transaction: t });
+
+      // d. Create User Address
+      if (parsedAddress && parsedAddress.length > 0) {
+        for (const addrData of parsedAddress) {
+          await UserAddress.create({
+            user_id: newUser.id,
+            state: addrData.state ? Number(addrData.state) : null,
+            district: addrData.district ? Number(addrData.district) : null,
+            block: addrData.block ? Number(addrData.block) : null,
+            lane_1: addrData.lane1 || addrData.lane_1 || "",
+            lane_2: addrData.lane2 || addrData.lane_2 || "",
+            village: addrData.village || "N/A",
+            pincode: addrData.pincode || "000000",
+            is_primary: addrData.is_primary === true || addrData.is_primary === 'true',
+            created_by: finalCreatorId
+          }, { transaction: t });
+        }
+      }
+
+      // e. Create Bank Details
+      if (parsedBankDetails && parsedBankDetails.length > 0) {
+        for (const bank of parsedBankDetails) {
+          if (bank.bank_name || bank.acc_number) {
+            await db.UserBankDetails.create({
+              user_id: newUser.id,
+              bank_name: bank.bank_name || "N/A",
+              acc_holder_name: bank.acc_holder_name || "N/A",
+              acc_number: bank.acc_number || "N/A",
+              ifsc_code: bank.ifsc_code || "N/A",
+              passbook_image_url: uploadedFilesData['passbook_image']?.[0]?.url || null,
+              is_primary: bank.is_primary === true || bank.is_primary === 'true',
+              is_active: true,
+              created_by: finalCreatorId
+            }, { transaction: t });
+          }
+        }
+      }
+
+      // f. Create UPI Details
+      if (upi_id) {
+        await db.UserUpiDetails.create({
+          user_id: newUser.id,
+          upi_id: upi_id.trim(),
+          created_by: finalCreatorId
+        }, { transaction: t });
+      }
+
+      // g. Save files into USER_DOCUMENTS
+      const docsToSave = fileFields.filter(f => !f.isBank && uploadedFilesData[f.key]);
+      for (const doc of docsToSave) {
+        const fileInfos = uploadedFilesData[doc.key];
+        if (Array.isArray(fileInfos)) {
+          for (const docInfo of fileInfos) {
+            await db.UserDocuments.create({
+              user_id: newUser.id,
+              document_type: doc.docType,
+              document_original_name: docInfo.original_name,
+              document_new_name: docInfo.new_name,
+              document_url: docInfo.url,
+              is_active: true,
+              created_by: finalCreatorId
+            }, { transaction: t });
+          }
+        }
+      }
+
+      return newUser;
+    });
+
+    // -------------------------------------------------------------
+    // 5. Generate JWT Access Token
+    // -------------------------------------------------------------
+    const token = jwt.sign(
+      { userId: registeredUser.id, email: registeredUser.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "3d" }
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "Pilot registered successfully",
+      user_id: registeredUser.id,
+      token
+    });
+
+  } catch (error) {
+    console.error("🔥 PILOT REGISTRATION ERROR:", error);
+    return res.status(error.message && error.message.includes('file') ? 400 : 500).json({
+      success: false,
+      message: "Pilot registration failed",
+      error: error.message
+    });
+  }
+};
+
+export const registerFarmer = async (req, res) => {
+  try {
+    // -------------------------------------------------------------
+    // Optional Authenticated User Check (Creator ID)
+    // -------------------------------------------------------------
+    let creatorId = null;
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.split(" ")[1];
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        creatorId = decoded.id || decoded.userId;
+      } catch (err) {
+        return res.status(401).json({ success: false, error: "Invalid or expired token." });
+      }
+    }
+
+    const body = req.body || {};
+    const {
+      first_name,
+      last_name,
+      mobile_number,
+      dob,
+      email,
+      password,
+      role,
+      isverifyEmail,
+      isMobileVerify
+    } = body;
+
+    // -------------------------------------------------------------
+    // 1. Validations
+    // -------------------------------------------------------------
+    if (!first_name || !first_name.trim()) {
+      return res.status(400).json({ success: false, error: "First name is required" });
+    }
+    if (!last_name || !last_name.trim()) {
+      return res.status(400).json({ success: false, error: "Last name is required" });
+    }
+    if (!email || !email.trim()) {
+      return res.status(400).json({ success: false, error: "Email is required" });
+    }
+    if (!password || !password.trim()) {
+      return res.status(400).json({ success: false, error: "Password is required" });
+    }
+    if (!mobile_number) {
+      return res.status(400).json({ success: false, error: "Mobile number is required" });
+    }
+
+    // Mobile validation: 10 digits
+    const mobileStr = String(mobile_number).trim();
+    if (!/^\d{10}$/.test(mobileStr)) {
+      return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
+    }
+
+    // Email regex validation with @ and .com
+    const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
+    }
+
+    if (email.trim().toLowerCase() === mobileStr.toLowerCase()) {
+      return res.status(400).json({ success: false, error: "Mobile number and email cannot be the same" });
+    }
+
+    const isEmailVerified = isverifyEmail === true || isverifyEmail === 'true';
+    const isMobileVerified = isMobileVerify === true || isMobileVerify === 'true';
+
+    if (!isEmailVerified && !isMobileVerified) {
+      return res.status(400).json({ success: false, error: "At least email or mobile verification must be completed first." });
+    }
+
+    // Role validation: Role check (Farmer ID 10)
+    // Dynamic lookup: Check if role with ID 10 exists with name 'Farmer' (case insensitive)
+    const targetRoleId = role ? Number(role) : 10;
+    const farmerRole = await db.MasterRole.findOne({
+      where: {
+        id: targetRoleId,
+        role_name: { [db.Sequelize.Op.iLike]: 'Farmer' }
+      }
+    });
+    if (!farmerRole) {
+      return res.status(400).json({ success: false, error: "Role validation failed: 'Farmer' role with designated ID is not configured in the database" });
+    }
+
+    // Check duplication: email and mobile checks
+    const existingUserByEmail = await User.findOne({ where: { email: email.trim() } });
+    if (existingUserByEmail) {
+      return res.status(400).json({ success: false, error: "User already exists with this email" });
+    }
+
+    const existingUserByMobile = await User.findOne({ where: { mobile_number: mobileStr } });
+    if (existingUserByMobile) {
+      return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
+    }
+
+    // Parse address
+    let parsedAddress = [];
+    if (body.address) {
+      try {
+        const parsed = JSON.parse(body.address);
+        parsedAddress = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e) {
+        parsedAddress = [{
+          state: body.state,
+          district: body.district,
+          block: body.block,
+          lane1: body.lane1 || body.lane_1,
+          lane2: body.lane2 || body.lane_2,
+          village: body.village,
+          pincode: body.pincode,
+          is_primary: body.is_primary === 'true' || body.is_primary === true
+        }];
+      }
+    } else if (body.state || body.lane1 || body.lane_1 || body.pincode || body.district) {
+      parsedAddress = [{
+        state: body.state,
+        district: body.district,
+        block: body.block,
+        lane1: body.lane1 || body.lane_1,
+        lane2: body.lane2 || body.lane_2,
+        village: body.village,
+        pincode: body.pincode,
+        is_primary: body.is_primary === 'true' || body.is_primary === true
+      }];
+    }
+
+    // -------------------------------------------------------------
+    // 2. Validate and upload profile image file
+    // -------------------------------------------------------------
+    let uploadedFileDetails = null;
+    if (req.file) {
+      const file = req.file;
+      if (file.size > 5 * 1024 * 1024) {
+        return res.status(400).json({ success: false, error: "Profile photo exceeds the 5MB size limit." });
+      }
+      const ext = file.originalname.split('.').pop().toLowerCase();
+      const mime = file.mimetype;
+      const allowed = ['jpg', 'jpeg', 'png'];
+      const isValid = allowed.includes(ext) || allowed.some(type => mime.includes(type));
+      if (!isValid) {
+        return res.status(400).json({ success: false, error: "Profile photo has an invalid format. Allowed: jpg, jpeg, png" });
+      }
+
+      // Upload to Cloudinary
+      const result = await uploadToCloudinary(file.buffer, "farmers", "auto", file.originalname);
+      uploadedFileDetails = {
+        original_name: file.originalname,
+        new_name: result.public_id,
+        url: result.secure_url
+      };
+    }
+
+    // -------------------------------------------------------------
+    // 3. Password hashing
+    // -------------------------------------------------------------
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const parseDOB = (dobStr) => {
+      if (!dobStr) return null;
+      const parts = dobStr.split('/');
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        return new Date(year, month, day);
+      }
+      return new Date(dobStr);
+    };
+
+    // -------------------------------------------------------------
+    // 4. Save using Sequelize Transaction
+    // -------------------------------------------------------------
+    const registeredUser = await db.sequelize.transaction(async (t) => {
+      // a. Create User record
+      const newUser = await User.create({
+        email: email.trim(),
+        password: hashedPassword,
+        username: `${first_name.trim()}_${last_name.trim()}_${Date.now()}`.substring(0, 50),
+        mobile_number: mobileStr,
+        is_superuser: false,
+        user_type: 3, // 3 = Farmer
+        isMobileVerify: isMobileVerified,
+        isEmailVerify: isEmailVerified,
+        created_by: creatorId || null
+      }, { transaction: t });
+
+      const finalCreatorId = creatorId || newUser.id;
+
+      const userRefId = `FAM-${String(newUser.id).padStart(5, '0')}`;
+      const updates = { user_ref_id: userRefId };
+      if (!creatorId) {
+        updates.created_by = finalCreatorId;
+      }
+      await newUser.update(updates, { transaction: t });
+
+      // b. Assign Role in USER_ROLE
+      await UserRole.create({
+        user_id: newUser.id,
+        role_id: farmerRole.id,
+        created_by: finalCreatorId
+      }, { transaction: t });
+
+      // c. Create User Profile
+      await UserProfile.create({
+        user_id: newUser.id,
+        first_name: first_name.trim(),
+        last_name: last_name.trim(),
+        whatsapp_number: mobileStr,
+        dob: parseDOB(dob),
+        user_image_original_filename: uploadedFileDetails?.original_name || null,
+        user_image_new_filename: uploadedFileDetails?.new_name || null,
+        user_image_url: uploadedFileDetails?.url || null,
+        created_by: finalCreatorId
+      }, { transaction: t });
+
+      // d. Create User Address
+      if (parsedAddress && parsedAddress.length > 0) {
+        for (const addrData of parsedAddress) {
+          await UserAddress.create({
+            user_id: newUser.id,
+            state: addrData.state ? Number(addrData.state) : null,
+            district: addrData.district ? Number(addrData.district) : null,
+            block: addrData.block ? Number(addrData.block) : null,
+            lane_1: addrData.lane1 || addrData.lane_1 || "",
+            lane_2: addrData.lane2 || addrData.lane_2 || "",
+            village: addrData.village || "N/A",
+            pincode: addrData.pincode || "000000",
+            is_primary: addrData.is_primary === true || addrData.is_primary === 'true',
+            created_by: finalCreatorId
+          }, { transaction: t });
+        }
+      }
+
+      return newUser;
+    });
+
+    // -------------------------------------------------------------
+    // 5. Generate JWT Access Token
+    // -------------------------------------------------------------
+    const token = jwt.sign(
+      { userId: registeredUser.id, email: registeredUser.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "3d" }
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "Farmer registered successfully",
+      user_id: registeredUser.id,
+      token
+    });
+
+  } catch (error) {
+    console.error("🔥 FARMER REGISTRATION ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Farmer registration failed",
+      error: error.message
+    });
+  }
+};
+
+export const sendOtp = async (req, res) => {
+  try {
+    const { email, mobile_number } = req.body;
+
+    const emailStr = email && email.trim() ? email.trim() : null;
+    const mobileStr = mobile_number && String(mobile_number).trim() ? String(mobile_number).trim() : null;
+
+    if (!emailStr && !mobileStr) {
+      return res.status(400).json({ success: false, error: "Either email or mobile number must be provided" });
+    }
+
+    if (emailStr) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
+      if (!emailRegex.test(emailStr)) {
+        return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
+      }
+    }
+
+    if (mobileStr) {
+      if (!/^\d{10}$/.test(mobileStr)) {
+        return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
+      }
+    }
+
+    if (emailStr && mobileStr && emailStr.toLowerCase() === mobileStr.toLowerCase()) {
+      return res.status(400).json({ success: false, error: "Mobile number and email cannot be the same" });
+    }
+
+    // Single query with OR if both are provided
+    const orConditions = [];
+    if (emailStr) orConditions.push({ email: emailStr });
+    if (mobileStr) orConditions.push({ mobile_number: mobileStr });
+
+    const existingUser = await User.findOne({
+      where: {
+        [db.Sequelize.Op.or]: orConditions
+      }
+    });
+
+    if (existingUser) {
+      if (emailStr && existingUser.email === emailStr) {
+        return res.status(400).json({ success: false, error: "User already exists with this email" });
+      }
+      if (mobileStr && existingUser.mobile_number === mobileStr) {
+        return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
+      }
+    }
+
+    // Check optional authentication to track who requested the OTP (for auditing)
+    let creatorId = null;
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.split(" ")[1];
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        creatorId = decoded.id || decoded.userId;
+      } catch (err) {
+        // Ignore token errors for optional auditing
+      }
+    }
+
+    // Generate random 6-digit OTPs only for requested channels
+    const emailOtp = emailStr ? Math.floor(100000 + Math.random() * 900000).toString() : null;
+    const mobileOtp = mobileStr ? Math.floor(100000 + Math.random() * 900000).toString() : null;
+    const expiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 minutes expiry
+
+    // Save to OtpVerification table
+    await OtpVerification.create({
+      email: emailStr,
+      mobile_number: mobileStr,
+      email_otp: emailOtp,
+      mobile_otp: mobileOtp,
+      expires_at: expiresAt,
+      is_email_verified: false,
+      is_mobile_verified: false,
+      created_by: creatorId || null
+    });
+
+    // Send Email if applicable
+    if (emailStr && emailOtp) {
+      await sendOtpEmail(emailStr, emailOtp);
+    }
+
+    // Send SMS (Dev Logger) if applicable
+    if (mobileStr && mobileOtp) {
+      console.log(`\n📱 [SMS OTP Logger] ───────────────────────────`);
+      console.log(`To:      ${mobileStr}`);
+      console.log(`OTP:     ${mobileOtp}`);
+      console.log(`──────────────────────────────────────────────\n`);
+    }
+
+    let successMessage = "OTP sent successfully.";
+    if (emailStr && mobileStr) {
+      successMessage = "OTPs sent successfully to email and mobile number.";
+    } else if (emailStr) {
+      successMessage = "OTP sent successfully to email.";
+    } else if (mobileStr) {
+      successMessage = "OTP sent successfully to mobile number.";
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: successMessage,
+      dev_otps: process.env.NODE_ENV !== 'production' ? { email_otp: emailOtp, mobile_otp: mobileOtp } : undefined
+    });
+
+  } catch (error) {
+    console.error("🔥 SEND OTP ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send OTP",
+      error: error.message
+    });
+  }
+};
+
+export const verifyOtp = async (req, res) => {
+  try {
+    const { email, mobile_number, email_otp, mobile_otp } = req.body;
+
+    const emailStr = email && email.trim() ? email.trim() : null;
+    const mobileStr = mobile_number && String(mobile_number).trim() ? String(mobile_number).trim() : null;
+
+    if (!emailStr && !mobileStr) {
+      return res.status(400).json({ success: false, error: "Either email or mobile number must be provided" });
+    }
+
+    const queryWhere = {};
+    if (emailStr) queryWhere.email = emailStr;
+    if (mobileStr) queryWhere.mobile_number = mobileStr;
+
+    // Find latest OTP record matching the criteria
+    const otpRecord = await OtpVerification.findOne({
+      where: queryWhere,
+      order: [['created_on', 'DESC']]
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({ success: false, error: "OTP has expired or no request was generated for this email/mobile." });
+    }
+
+    const maxAttempts = parseInt(process.env.MAX_OTP_ATTEMPTS || '3', 10);
+    if (otpRecord.attempts >= maxAttempts) {
+      return res.status(400).json({ success: false, error: "You have hit the maximum attempts. Please generate another OTP." });
+    }
+
+    if (new Date() > new Date(otpRecord.expires_at)) {
+      return res.status(400).json({ success: false, error: "OTP has expired" });
+    }
+
+    let isMobileVerify = false;
+    let isEmailVerify = false;
+
+    // Validate email OTP if email is sent
+    if (emailStr) {
+      if (!email_otp) {
+        return res.status(400).json({ success: false, error: "Email OTP is required." });
+      }
+      if (otpRecord.email_otp !== String(email_otp).trim()) {
+        await otpRecord.increment('attempts');
+        await otpRecord.reload();
+        if (otpRecord.attempts >= maxAttempts) {
+          return res.status(400).json({ success: false, error: "You have hit the maximum attempts. Please generate another OTP." });
+        }
+        return res.status(400).json({ success: false, error: "Invalid email OTP provided." });
+      }
+      isEmailVerify = true;
+    }
+
+    // Validate mobile OTP if mobile is sent
+    if (mobileStr) {
+      if (!mobile_otp) {
+        return res.status(400).json({ success: false, error: "Mobile OTP is required." });
+      }
+      if (otpRecord.mobile_otp !== String(mobile_otp).trim()) {
+        await otpRecord.increment('attempts');
+        await otpRecord.reload();
+        if (otpRecord.attempts >= maxAttempts) {
+          return res.status(400).json({ success: false, error: "You have hit the maximum attempts. Please generate another OTP." });
+        }
+        return res.status(400).json({ success: false, error: "Invalid mobile OTP provided." });
+      }
+      isMobileVerify = true;
+    }
+
+    // Update verified fields in OtpVerification
+    const updateFields = { modified_on: new Date() };
+    if (isEmailVerify) updateFields.is_email_verified = true;
+    if (isMobileVerify) updateFields.is_mobile_verified = true;
+    await otpRecord.update(updateFields);
+
+    let message = "";
+    if (isEmailVerify && isMobileVerify) {
+      message = "Both verified successfully.";
+    } else if (isEmailVerify) {
+      message = "Email is verified successfully.";
+    } else if (isMobileVerify) {
+      message = "Mobile is verified successfully.";
+    }
+
+    return res.status(200).json({
+      success: true,
+      message,
+      isMobileVerify,
+      isEmailVerify
+    });
+
+  } catch (error) {
+    console.error("🔥 VERIFY OTP ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to verify OTP",
+      error: error.message
+    });
+  }
+};
+
+export const updatePilot = async (req, res) => {
+  try {
+    const loggedInUserId = req.user?.id || req.user?.userId;
+    if (!loggedInUserId) {
+      return res.status(401).json({ success: false, error: "Unauthorized: Access token is missing or invalid" });
+    }
+
+    const body = req.body || {};
+    const {
+      user_id, // Target user to update (optional, defaults to logged-in user)
+      first_name,
+      last_name,
+      dob,
+      password,
+      username,
+      upi_id,
+      aadhar_number,
+      pan_card_number,
+      email,
+      mobile_number
+    } = body;
+
+    const targetUserId = user_id || loggedInUserId;
+
+    // Authorization: If updating someone else, loggedInUserId must be an Admin
+    if (targetUserId !== loggedInUserId) {
+      const userRole = await UserRole.findOne({ where: { user_id: loggedInUserId } });
+      let isAdmin = false;
+      if (userRole) {
+        const role = await db.MasterRole.findByPk(userRole.role_id);
+        if (role && role.role_name.toLowerCase().includes("admin")) {
+          isAdmin = true;
+        }
+      }
+      const loggedInUser = await User.findByPk(loggedInUserId);
+      if (!loggedInUser?.is_superuser && !isAdmin) {
+        return res.status(403).json({ success: false, error: "Unauthorized to update another user's profile." });
+      }
+    }
+
+    const targetUser = await User.findByPk(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    if (email !== undefined && email !== null) {
+      const emailStr = email.trim();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
+      if (!emailRegex.test(emailStr)) {
+        return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
+      }
+      if (emailStr !== targetUser.email) {
+        const emailExists = await User.findOne({ where: { email: emailStr, id: { [db.Sequelize.Op.ne]: targetUserId } } });
+        if (emailExists) {
+          return res.status(400).json({ success: false, error: "User already exists with this email" });
+        }
+      }
+    }
+
+    if (mobile_number !== undefined && mobile_number !== null) {
+      const mobileStr = String(mobile_number).trim();
+      if (!/^\d{10}$/.test(mobileStr)) {
+        return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
+      }
+      if (mobileStr !== targetUser.mobile_number) {
+        const mobileExists = await User.findOne({ where: { mobile_number: mobileStr, id: { [db.Sequelize.Op.ne]: targetUserId } } });
+        if (mobileExists) {
+          return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
+        }
+      }
+    }
+
+    // Verify target user is a Pilot
+    const targetUserRole = await UserRole.findOne({ where: { user_id: targetUserId } });
+    if (targetUserRole) {
+      const role = await db.MasterRole.findByPk(targetUserRole.role_id);
+      if (!role || !role.role_name.toLowerCase().includes("pilot")) {
+        return res.status(400).json({ success: false, error: "Target user is not a Pilot." });
+      }
+    }
+
+    // Parse bank_details & address
+    let parsedBankDetails = null;
+    if (body.bank_details) {
+      try {
+        const parsed = JSON.parse(body.bank_details);
+        parsedBankDetails = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e) {
+        parsedBankDetails = [{
+          bank_name: body.bank_name,
+          acc_holder_name: body.acc_holder_name,
+          acc_number: body.acc_number,
+          ifsc_code: body.ifsc_code,
+          is_primary: body.is_primary === 'true' || body.is_primary === true
+        }];
+      }
+    } else if (body.bank_name) {
+      parsedBankDetails = [{
+        bank_name: body.bank_name,
+        acc_holder_name: body.acc_holder_name,
+        acc_number: body.acc_number,
+        ifsc_code: body.ifsc_code,
+        is_primary: body.is_primary === 'true' || body.is_primary === true
+      }];
+    }
+
+    let parsedAddress = null;
+    if (body.address) {
+      try {
+        const parsed = JSON.parse(body.address);
+        parsedAddress = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e) {
+        parsedAddress = [{
+          state: body.state,
+          district: body.district,
+          block: body.block,
+          lane1: body.lane1 || body.lane_1,
+          lane2: body.lane2 || body.lane_2,
+          village: body.village,
+          pincode: body.pincode,
+          is_primary: body.is_primary === 'true' || body.is_primary === true
+        }];
+      }
+    } else if (body.state || body.lane1 || body.lane_1 || body.pincode || body.district) {
+      parsedAddress = [{
+        state: body.state,
+        district: body.district,
+        block: body.block,
+        lane1: body.lane1 || body.lane_1,
+        lane2: body.lane2 || body.lane_2,
+        village: body.village,
+        pincode: body.pincode,
+        is_primary: body.is_primary === 'true' || body.is_primary === true
+      }];
+    }
+
+    // Validate and upload files
+    const validateFile = (file, allowedTypes, label) => {
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) {
+        throw new Error(`${label} file exceeds the 5MB size limit.`);
+      }
+      const ext = file.originalname.split('.').pop().toLowerCase();
+      const mime = file.mimetype;
+      const isValid = allowedTypes.includes(ext) || allowedTypes.some(type => mime.includes(type));
+      if (!isValid) {
+        throw new Error(`${label} has an invalid format. Allowed: ${allowedTypes.join(', ')}`);
+      }
+    };
+
+    const fileFields = [
+      { key: 'profile_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Profile photo', docType: 5 },
+      { key: 'aaddhar_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Aadhar Card', docType: 10 },
+      { key: 'pan_card_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Pan Card', docType: 15 },
+      { key: 'dcga_pilot_cert', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI Pilot Cert', docType: 20 },
+      { key: 'dcga_pilot_license', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI License', docType: 25 },
+      { key: 'medical_certificate', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Medical Cert', docType: 30 },
+      { key: 'insurance_doc', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Insurance Doc', docType: 35 },
+      { key: 'passbook_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Passbook photo', isBank: true }
+    ];
+
+    const uploadedFilesData = {};
+    for (const field of fileFields) {
+      const fileArray = req.files && req.files[field.key];
+      if (fileArray && fileArray.length > 0) {
+        uploadedFilesData[field.key] = [];
+        for (const file of fileArray) {
+          validateFile(file, field.allowed, field.label);
+          const ext = file.originalname.split('.').pop().toLowerCase();
+          const resourceType = (ext === 'pdf') ? 'raw' : 'auto';
+          const result = await uploadToCloudinary(file.buffer, "pilots", resourceType, file.originalname);
+          uploadedFilesData[field.key].push({
+            original_name: file.originalname,
+            new_name: result.public_id,
+            url: result.secure_url
+          });
+        }
+      }
+    }
+
+    const parseDOB = (dobStr) => {
+      if (!dobStr) return null;
+      const parts = dobStr.split('/');
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        return new Date(year, month, day);
+      }
+      return new Date(dobStr);
+    };
+
+    await db.sequelize.transaction(async (t) => {
+      // 1. Update basic User info
+      const userUpdateFields = {};
+      if (password && password.trim()) {
+        userUpdateFields.password = await bcrypt.hash(password, 10);
+      }
+      if (username && username.trim()) {
+        userUpdateFields.username = username.trim();
+      }
+      if (email !== undefined && email !== null) {
+        userUpdateFields.email = email.trim();
+      }
+      if (mobile_number !== undefined && mobile_number !== null) {
+        userUpdateFields.mobile_number = String(mobile_number).trim();
+      }
+      userUpdateFields.modified_by = loggedInUserId;
+      userUpdateFields.modified_on = new Date();
+
+      await targetUser.update(userUpdateFields, { transaction: t });
+
+      // 2. Update User Profile
+      const existingProfile = await UserProfile.findOne({ where: { user_id: targetUserId }, transaction: t });
+      const profileUpdateFields = {
+        modified_by: loggedInUserId,
+        modified_on: new Date()
+      };
+      if (first_name) profileUpdateFields.first_name = first_name.trim();
+      if (last_name) profileUpdateFields.last_name = last_name.trim();
+      if (dob) profileUpdateFields.dob = parseDOB(dob);
+      if (aadhar_number) profileUpdateFields.aadhar_number = String(aadhar_number).trim();
+      if (pan_card_number) profileUpdateFields.pan_card_number = String(pan_card_number).trim();
+
+      if (uploadedFilesData['profile_image']?.[0]) {
+        profileUpdateFields.user_image_original_filename = uploadedFilesData['profile_image'][0].original_name;
+        profileUpdateFields.user_image_new_filename = uploadedFilesData['profile_image'][0].new_name;
+        profileUpdateFields.user_image_url = uploadedFilesData['profile_image'][0].url;
+      }
+
+      if (existingProfile) {
+        await existingProfile.update(profileUpdateFields, { transaction: t });
+      } else {
+        await UserProfile.create({
+          user_id: targetUserId,
+          first_name: first_name || "N/A",
+          last_name: last_name || "N/A",
+          whatsapp_number: targetUser.mobile_number,
+          ...profileUpdateFields,
+          created_by: loggedInUserId
+        }, { transaction: t });
+      }
+
+      // 3. Update User Address (recreate all to support multiple addresses)
+      if (parsedAddress && parsedAddress.length > 0) {
+        await UserAddress.destroy({ where: { user_id: targetUserId }, transaction: t });
+        for (const addrData of parsedAddress) {
+          await UserAddress.create({
+            user_id: targetUserId,
+            state: addrData.state ? Number(addrData.state) : null,
+            district: addrData.district ? Number(addrData.district) : null,
+            block: addrData.block ? Number(addrData.block) : null,
+            lane_1: addrData.lane1 || addrData.lane_1 || "",
+            lane_2: addrData.lane2 || addrData.lane_2 || "",
+            village: addrData.village || "N/A",
+            pincode: addrData.pincode || "000000",
+            is_primary: addrData.is_primary === true || addrData.is_primary === 'true',
+            created_by: loggedInUserId,
+            modified_by: loggedInUserId,
+            modified_on: new Date()
+          }, { transaction: t });
+        }
+      }
+
+      // 4. Update Bank Details (only if bank_details was supplied)
+      if (parsedBankDetails && parsedBankDetails.length > 0) {
+        await db.UserBankDetails.destroy({ where: { user_id: targetUserId }, transaction: t });
+        for (const bank of parsedBankDetails) {
+          if (bank.bank_name || bank.acc_number) {
+            await db.UserBankDetails.create({
+              user_id: targetUserId,
+              bank_name: bank.bank_name || "N/A",
+              acc_holder_name: bank.acc_holder_name || "N/A",
+              acc_number: bank.acc_number || "N/A",
+              ifsc_code: bank.ifsc_code || "N/A",
+              passbook_image_url: uploadedFilesData['passbook_image']?.[0]?.url || null,
+              is_primary: bank.is_primary === true || bank.is_primary === 'true',
+              is_active: true,
+              created_by: loggedInUserId,
+              modified_by: loggedInUserId
+            }, { transaction: t });
+          }
+        }
+      } else if (uploadedFilesData['passbook_image']?.[0]) {
+        const primaryBank = await db.UserBankDetails.findOne({ where: { user_id: targetUserId, is_primary: true }, transaction: t });
+        if (primaryBank) {
+          await primaryBank.update({
+            passbook_image_url: uploadedFilesData['passbook_image'][0].url,
+            modified_by: loggedInUserId,
+            modified_on: new Date()
+          }, { transaction: t });
+        }
+      }
+
+      // 5. Update UPI Details
+      if (upi_id !== undefined) {
+        await db.UserUpiDetails.destroy({ where: { user_id: targetUserId }, transaction: t });
+        if (upi_id && upi_id.trim()) {
+          await db.UserUpiDetails.create({
+            user_id: targetUserId,
+            upi_id: upi_id.trim(),
+            created_by: loggedInUserId,
+            modified_by: loggedInUserId
+          }, { transaction: t });
+        }
+      }
+
+      // 6. Update User Documents (append new rows if certificates uploaded)
+      const docsToSave = fileFields.filter(f => !f.isBank && uploadedFilesData[f.key]);
+      for (const doc of docsToSave) {
+        const fileInfos = uploadedFilesData[doc.key];
+        if (Array.isArray(fileInfos)) {
+          for (const docInfo of fileInfos) {
+            await db.UserDocuments.destroy({ where: { user_id: targetUserId, document_type: doc.docType }, transaction: t });
+
+            await db.UserDocuments.create({
+              user_id: targetUserId,
+              document_type: doc.docType,
+              document_original_name: docInfo.original_name,
+              document_new_name: docInfo.new_name,
+              document_url: docInfo.url,
+              is_active: true,
+              created_by: loggedInUserId,
+              modified_by: loggedInUserId
+            }, { transaction: t });
+          }
+        }
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Pilot profile updated successfully."
+    });
+
+  } catch (error) {
+    console.error("🔥 PILOT UPDATE ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Pilot profile update failed",
+      error: error.message
+    });
+  }
+};
+
+export const updateFarmer = async (req, res) => {
+  try {
+    const loggedInUserId = req.user?.id || req.user?.userId;
+    if (!loggedInUserId) {
+      return res.status(401).json({ success: false, error: "Unauthorized: Access token is missing or invalid" });
+    }
+
+    const body = req.body || {};
+    const {
+      user_id, // Target user to update (optional, defaults to logged-in user)
+      first_name,
+      last_name,
+      dob,
+      password,
+      username,
+      email,
+      mobile_number
+    } = body;
+
+    const targetUserId = user_id || loggedInUserId;
+
+    // Authorization: If updating someone else, loggedInUserId must be an Admin
+    if (targetUserId !== loggedInUserId) {
+      const userRole = await UserRole.findOne({ where: { user_id: loggedInUserId } });
+      let isAdmin = false;
+      if (userRole) {
+        const role = await db.MasterRole.findByPk(userRole.role_id);
+        if (role && role.role_name.toLowerCase().includes("admin")) {
+          isAdmin = true;
+        }
+      }
+      const loggedInUser = await User.findByPk(loggedInUserId);
+      if (!loggedInUser?.is_superuser && !isAdmin) {
+        return res.status(403).json({ success: false, error: "Unauthorized to update another user's profile." });
+      }
+    }
+
+    const targetUser = await User.findByPk(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    if (email !== undefined && email !== null) {
+      const emailStr = email.trim();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
+      if (!emailRegex.test(emailStr)) {
+        return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
+      }
+      if (emailStr !== targetUser.email) {
+        const emailExists = await User.findOne({ where: { email: emailStr, id: { [db.Sequelize.Op.ne]: targetUserId } } });
+        if (emailExists) {
+          return res.status(400).json({ success: false, error: "User already exists with this email" });
+        }
+      }
+    }
+
+    if (mobile_number !== undefined && mobile_number !== null) {
+      const mobileStr = String(mobile_number).trim();
+      if (!/^\d{10}$/.test(mobileStr)) {
+        return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
+      }
+      if (mobileStr !== targetUser.mobile_number) {
+        const mobileExists = await User.findOne({ where: { mobile_number: mobileStr, id: { [db.Sequelize.Op.ne]: targetUserId } } });
+        if (mobileExists) {
+          return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
+        }
+      }
+    }
+
+    // Verify target user is a Farmer
+    const targetUserRole = await UserRole.findOne({ where: { user_id: targetUserId } });
+    if (targetUserRole) {
+      const role = await db.MasterRole.findByPk(targetUserRole.role_id);
+      if (!role || !role.role_name.toLowerCase().includes("farmer")) {
+        return res.status(400).json({ success: false, error: "Target user is not a Farmer." });
+      }
+    }
+
+    // Parse address
+    let parsedAddress = null;
+    if (body.address) {
+      try {
+        const parsed = JSON.parse(body.address);
+        parsedAddress = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e) {
+        parsedAddress = [{
+          state: body.state,
+          district: body.district,
+          block: body.block,
+          lane1: body.lane1 || body.lane_1,
+          lane2: body.lane2 || body.lane_2,
+          village: body.village,
+          pincode: body.pincode,
+          is_primary: body.is_primary === 'true' || body.is_primary === true
+        }];
+      }
+    } else if (body.state || body.lane1 || body.lane_1 || body.pincode || body.district) {
+      parsedAddress = [{
+        state: body.state,
+        district: body.district,
+        block: body.block,
+        lane1: body.lane1 || body.lane_1,
+        lane2: body.lane2 || body.lane_2,
+        village: body.village,
+        pincode: body.pincode,
+        is_primary: body.is_primary === 'true' || body.is_primary === true
+      }];
+    }
+
+    // Process profile image
+    let uploadedFileDetails = null;
+    if (req.file) {
+      const file = req.file;
+      if (file.size > 5 * 1024 * 1024) {
+        return res.status(400).json({ success: false, error: "Profile photo exceeds the 5MB size limit." });
+      }
+      const ext = file.originalname.split('.').pop().toLowerCase();
+      const mime = file.mimetype;
+      const allowed = ['jpg', 'jpeg', 'png'];
+      const isValid = allowed.includes(ext) || allowed.some(type => mime.includes(type));
+      if (!isValid) {
+        return res.status(400).json({ success: false, error: "Profile photo has an invalid format. Allowed: jpg, jpeg, png" });
+      }
+
+      const result = await uploadToCloudinary(file.buffer, "farmers", "auto", file.originalname);
+      uploadedFileDetails = {
+        original_name: file.originalname,
+        new_name: result.public_id,
+        url: result.secure_url
+      };
+    }
+
+    const parseDOB = (dobStr) => {
+      if (!dobStr) return null;
+      const parts = dobStr.split('/');
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        return new Date(year, month, day);
+      }
+      return new Date(dobStr);
+    };
+
+    await db.sequelize.transaction(async (t) => {
+      // 1. Update basic User info
+      const userUpdateFields = {};
+      if (password && password.trim()) {
+        userUpdateFields.password = await bcrypt.hash(password, 10);
+      }
+      if (username && username.trim()) {
+        userUpdateFields.username = username.trim();
+      }
+      if (email !== undefined && email !== null) {
+        userUpdateFields.email = email.trim();
+      }
+      if (mobile_number !== undefined && mobile_number !== null) {
+        userUpdateFields.mobile_number = String(mobile_number).trim();
+      }
+      userUpdateFields.modified_by = loggedInUserId;
+      userUpdateFields.modified_on = new Date();
+
+      await targetUser.update(userUpdateFields, { transaction: t });
+
+      // 2. Update User Profile
+      const existingProfile = await UserProfile.findOne({ where: { user_id: targetUserId }, transaction: t });
+      const profileUpdateFields = {
+        modified_by: loggedInUserId,
+        modified_on: new Date()
+      };
+      if (first_name) profileUpdateFields.first_name = first_name.trim();
+      if (last_name) profileUpdateFields.last_name = last_name.trim();
+      if (dob) profileUpdateFields.dob = parseDOB(dob);
+
+      if (uploadedFileDetails) {
+        profileUpdateFields.user_image_original_filename = uploadedFileDetails.original_name;
+        profileUpdateFields.user_image_new_filename = uploadedFileDetails.new_name;
+        profileUpdateFields.user_image_url = uploadedFileDetails.url;
+      }
+
+      if (existingProfile) {
+        await existingProfile.update(profileUpdateFields, { transaction: t });
+      } else {
+        await UserProfile.create({
+          user_id: targetUserId,
+          first_name: first_name || "N/A",
+          last_name: last_name || "N/A",
+          whatsapp_number: targetUser.mobile_number,
+          ...profileUpdateFields,
+          created_by: loggedInUserId
+        }, { transaction: t });
+      }
+
+      // 3. Update User Address (recreate all to support multiple addresses)
+      if (parsedAddress && parsedAddress.length > 0) {
+        await UserAddress.destroy({ where: { user_id: targetUserId }, transaction: t });
+        for (const addrData of parsedAddress) {
+          await UserAddress.create({
+            user_id: targetUserId,
+            state: addrData.state ? Number(addrData.state) : null,
+            district: addrData.district ? Number(addrData.district) : null,
+            block: addrData.block ? Number(addrData.block) : null,
+            lane_1: addrData.lane1 || addrData.lane_1 || "",
+            lane_2: addrData.lane2 || addrData.lane_2 || "",
+            village: addrData.village || "N/A",
+            pincode: addrData.pincode || "000000",
+            is_primary: addrData.is_primary === true || addrData.is_primary === 'true',
+            created_by: loggedInUserId,
+            modified_by: loggedInUserId,
+            modified_on: new Date()
+          }, { transaction: t });
+        }
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Farmer profile updated successfully."
+    });
+
+  } catch (error) {
+    console.error("🔥 FARMER UPDATE ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Farmer profile update failed",
+      error: error.message
+    });
   }
 };
