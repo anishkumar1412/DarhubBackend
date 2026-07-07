@@ -1571,7 +1571,7 @@ export const createOrder = async (req, res) => {
     // Calculate working days based on MasterWorkingDays logic
     let calculatedNumOfDays = parseInt(num_of_days) || 1;
     let calculatedEndDate = end_date || start_date;
-    
+
     try {
       const workingDayRecord = await db.MasterWorkingDays.findOne({
         where: {
@@ -1583,7 +1583,7 @@ export const createOrder = async (req, res) => {
 
       if (workingDayRecord && workingDayRecord.working_days) {
         calculatedNumOfDays = workingDayRecord.working_days;
-        
+
         // Compute end_date by adding (working_days - 1) to start_date
         const stDate = new Date(start_date);
         stDate.setDate(stDate.getDate() + (calculatedNumOfDays - 1));
@@ -1640,6 +1640,7 @@ export const createOrder = async (req, res) => {
     return res.status(201).json({
       message: "Order and address created successfully",
       booking_id: bookingId,
+      dev_otp: process.env.NODE_ENV !== 'production' ? bookingOtp : undefined
     });
 
   } catch (error) {
@@ -3176,7 +3177,7 @@ export const registerFarmer = async (req, res) => {
 
 export const sendOtp = async (req, res) => {
   try {
-    const { email, mobile_number } = req.body;
+    const { email, mobile_number, purpose } = req.body;
 
     const emailStr = email && email.trim() ? email.trim() : null;
     const mobileStr = mobile_number && String(mobile_number).trim() ? String(mobile_number).trim() : null;
@@ -3202,23 +3203,27 @@ export const sendOtp = async (req, res) => {
       return res.status(400).json({ success: false, error: "Mobile number and email cannot be the same" });
     }
 
-    // Single query with OR if both are provided
-    const orConditions = [];
-    if (emailStr) orConditions.push({ email: emailStr });
-    if (mobileStr) orConditions.push({ mobile_number: mobileStr });
+    // Only fail if the user exists when the purpose is specifically for "registration" or undefined
+    const isRegistration = !purpose || purpose === "registration";
 
-    const existingUser = await User.findOne({
-      where: {
-        [db.Sequelize.Op.or]: orConditions
-      }
-    });
+    if (isRegistration) {
+      const orConditions = [];
+      if (emailStr) orConditions.push({ email: emailStr });
+      if (mobileStr) orConditions.push({ mobile_number: mobileStr });
 
-    if (existingUser) {
-      if (emailStr && existingUser.email === emailStr) {
-        return res.status(400).json({ success: false, error: "User already exists with this email" });
-      }
-      if (mobileStr && existingUser.mobile_number === mobileStr) {
-        return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
+      const existingUser = await User.findOne({
+        where: {
+          [db.Sequelize.Op.or]: orConditions
+        }
+      });
+
+      if (existingUser) {
+        if (emailStr && existingUser.email === emailStr) {
+          return res.status(400).json({ success: false, error: "User already exists with this email" });
+        }
+        if (mobileStr && existingUser.mobile_number === mobileStr) {
+          return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
+        }
       }
     }
 

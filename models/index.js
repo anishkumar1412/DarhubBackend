@@ -76,9 +76,7 @@ import InventoryAccessory from './InventoryAccessory.js';
 import InventoryDrone from './InventoryDrone.js';
 import InventoryShipment from './InventoryShipment.js';
 import MaintenanceLog from './MaintenanceLog.js';
-import PurchaseOrder from './PurchaseOrder.js';
 import Vendor from './Vendor.js';
-import SalesOrder from './SalesOrder.js';
 
 // ── Pilot maintenance models ─────────────────────────────────────
 import PilotMaintenanceTask from './PilotMaintenanceTask.js';
@@ -182,7 +180,6 @@ const db = {
   AuditLog: AuditLog(sequelize, DataTypes),
   SprayingOrderComment: SprayingOrderComment(sequelize, DataTypes),
 
-<<<<<<< HEAD
   // Inventory & Orders models
   Category: Category(sequelize, DataTypes),
   Product: Product(sequelize, DataTypes),
@@ -202,21 +199,17 @@ const db = {
   UserBankDetails: UserBankDetails(sequelize, DataTypes),
   UserDocuments: UserDocuments(sequelize, DataTypes),
   OtpVerification: OtpVerification(sequelize, DataTypes),
-=======
   // Inventory dashboard models
   InventoryAccessory: InventoryAccessory(sequelize, DataTypes),
   InventoryDrone: InventoryDrone(sequelize, DataTypes),
   InventoryShipment: InventoryShipment(sequelize, DataTypes),
   MaintenanceLog: MaintenanceLog(sequelize, DataTypes),
-  PurchaseOrder: PurchaseOrder(sequelize, DataTypes),
   Vendor: Vendor(sequelize, DataTypes),
-  SalesOrder: SalesOrder(sequelize, DataTypes),
 
   // Pilot maintenance models
   PilotMaintenanceTask: PilotMaintenanceTask(sequelize, DataTypes),
   PilotMaintenanceChecklist: PilotMaintenanceChecklist(sequelize, DataTypes),
   PilotMaintenanceAttachment: PilotMaintenanceAttachment(sequelize, DataTypes),
->>>>>>> 57db33b73037736565fcc0730ab667ce41a3bb86
 };
 
 // 🪛 Pilot Maintenance Associations 🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛
