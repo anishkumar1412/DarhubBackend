@@ -130,9 +130,9 @@ export const adminLoginController = asyncHandler(async (req, res) => {
         {
           token,
           admin: {
-            id:          user.id,
-            email:       user.email,
-            full_name:   profile.full_name,
+            id: user.id,
+            email: user.email,
+            full_name: profile.full_name,
             role,
             permissions,
           },
@@ -163,7 +163,7 @@ export const setupPasswordController = asyncHandler(async (req, res) => {
   const hashed = hashToken(token);
   const profile = await AdminProfile.findOne({
     where: {
-      setup_token:            hashed,
+      setup_token: hashed,
       setup_token_expires_at: { [Op.gt]: new Date() },
     },
   });
@@ -186,8 +186,8 @@ export const setupPasswordController = asyncHandler(async (req, res) => {
 
   // Activate profile & clear token
   await profile.update({
-    is_verified:            true,
-    setup_token:            null,
+    is_verified: true,
+    setup_token: null,
     setup_token_expires_at: null,
   });
 
@@ -219,7 +219,7 @@ export const forgotPasswordController = asyncHandler(async (req, res) => {
     );
 
     await profile.update({
-      setup_token:            hashed,
+      setup_token: hashed,
       setup_token_expires_at: expiresAt,
     });
 
@@ -261,7 +261,7 @@ export const resetPasswordController = asyncHandler(async (req, res) => {
   const hashed = hashToken(token);
   const profile = await AdminProfile.findOne({
     where: {
-      setup_token:            hashed,
+      setup_token: hashed,
       setup_token_expires_at: { [Op.gt]: new Date() },
     },
   });
@@ -277,7 +277,7 @@ export const resetPasswordController = asyncHandler(async (req, res) => {
 
   await User.update({ password: hashedPassword }, { where: { id: profile.user_id } });
   await profile.update({
-    setup_token:            null,
+    setup_token: null,
     setup_token_expires_at: null,
   });
 
@@ -329,12 +329,12 @@ export const createAdminController = asyncHandler(async (req, res) => {
     const user = await User.create(
       {
         email,
-        password:     null,
-        username:     full_name,
+        password: null,
+        username: full_name,
         mobile_number: null,
         is_superuser: false,
-        user_type:    2, // 2 = admin
-        created_by:   req.admin.id,
+        user_type: 2, // 2 = admin
+        created_by: req.admin.id,
       },
       { transaction: t }
     );
@@ -342,13 +342,13 @@ export const createAdminController = asyncHandler(async (req, res) => {
     // 2. Create AdminProfile
     await AdminProfile.create(
       {
-        user_id:                user.id,
+        user_id: user.id,
         full_name,
         email,
-        is_verified:            false,
-        setup_token:            hashed,
+        is_verified: false,
+        setup_token: hashed,
         setup_token_expires_at: expiresAt,
-        created_by:             req.admin.id,
+        created_by: req.admin.id,
       },
       { transaction: t }
     );
@@ -390,10 +390,10 @@ export const getMeController = asyncHandler(async (req, res) => {
     new ApiResponse(
       200,
       {
-        id:          req.admin.id,
-        email:       req.admin.email,
-        full_name:   profile?.full_name,
-        role:        req.admin.role,
+        id: req.admin.id,
+        email: req.admin.email,
+        full_name: profile?.full_name,
+        role: req.admin.role,
         permissions: req.admin.permissions,
       },
       'Session valid'

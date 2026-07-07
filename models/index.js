@@ -1,5 +1,6 @@
 import Sequelize, { DataTypes, QueryTypes } from 'sequelize';
 import db1 from '../config/db.js';
+import logger from '../utils/logger.js';
 
 // ── Existing models ───────────────────────────────────────────────
 import Drone from './Drone1.js';
@@ -43,12 +44,44 @@ import SprayingDailyLogs from './SprayingDailyLogs.js';
 import AuditLog from './AuditLog.js';
 import SprayingOrderComment from './SprayingOrderComment.js';
 import MasterWorkingDays from './MasterWorkingdays.js';
+import Fertilizer from './Fertilizer.js';
+import UserUpiDetails from './UserUpiDetails.js';
+import UserBankDetails from './UserBankDetails.js';
+import UserDocuments from './UserDocuments.js';
+import OtpVerification from './OtpVerification.js';
+
+// ── Inventory & Sales/Purchase Order models (NEW) ───────────────────
+import Category from './Category.js';
+import Product from './Product.js';
+import Supplier from './Supplier.js';
+import Customer from './Customer.js';
+import Warehouse from './Warehouse.js';
+import WarehouseLocation from './WarehouseLocation.js';
+import WarehouseAdditional from './WarehouseAdditional.js';
+import Stock from './Stock.js';
+import PurchaseOrder from './PurchaseOrder.js';
+import PurchaseOrderItem from './PurchaseOrderItem.js';
+import SalesOrder from './SalesOrder.js';
+import SalesOrderItem from './SalesOrderItem.js';
+import StockTransaction from './StockTransaction.js';
 
 // ── Admin auth models (NEW) ───────────────────────────────────────
 import AdminProfile from './AdminProfile.js';
 import MasterRole from './MasterRole.js';
 import MasterPrivilage from './MasterPrivilage.js';
 import MasterRolePrivilage from './MasterRolePrivilage.js';
+
+// ── Inventory dashboard models ────────────────────────────────────
+import InventoryAccessory from './InventoryAccessory.js';
+import InventoryDrone from './InventoryDrone.js';
+import InventoryShipment from './InventoryShipment.js';
+import MaintenanceLog from './MaintenanceLog.js';
+import Vendor from './Vendor.js';
+
+// ── Pilot maintenance models ─────────────────────────────────────
+import PilotMaintenanceTask from './PilotMaintenanceTask.js';
+import PilotMaintenanceChecklist from './PilotMaintenanceChecklist.js';
+import PilotMaintenanceAttachment from './PilotMaintenanceAttachment.js';
 
 // ── Initialize Sequelize ──────────────────────────────────────────
 const sequelize = new Sequelize(
@@ -78,9 +111,9 @@ const sequelize = new Sequelize(
 // ── Test connection ───────────────────────────────────────────────
 try {
   await sequelize.authenticate();
-  console.log('✅ Connection has been established successfully.');
+  logger.info('✅ Connection has been established successfully.');
 } catch (err) {
-  console.error('❌ Unable to connect to the database:', err);
+  logger.error('❌ Unable to connect to the database:', err);
 }
 
 // ── Register all models ───────────────────────────────────────────
@@ -89,6 +122,7 @@ const db = {
   sequelize,
   DataTypes,
   QueryTypes,
+  Op: Sequelize.Op,
 
   // Drone models
   Drone1: Drone(sequelize, DataTypes),
@@ -145,17 +179,91 @@ const db = {
   SprayingDailyLogs: SprayingDailyLogs(sequelize, DataTypes),
   AuditLog: AuditLog(sequelize, DataTypes),
   SprayingOrderComment: SprayingOrderComment(sequelize, DataTypes),
+
+  // Inventory & Orders models
+  Category: Category(sequelize, DataTypes),
+  Product: Product(sequelize, DataTypes),
+  Supplier: Supplier(sequelize, DataTypes),
+  Customer: Customer(sequelize, DataTypes),
+  Warehouse: Warehouse(sequelize, DataTypes),
+  WarehouseLocation: WarehouseLocation(sequelize, DataTypes),
+  WarehouseAdditional: WarehouseAdditional(sequelize, DataTypes),
+  Stock: Stock(sequelize, DataTypes),
+  PurchaseOrder: PurchaseOrder(sequelize, DataTypes),
+  PurchaseOrderItem: PurchaseOrderItem(sequelize, DataTypes),
+  SalesOrder: SalesOrder(sequelize, DataTypes),
+  SalesOrderItem: SalesOrderItem(sequelize, DataTypes),
+  StockTransaction: StockTransaction(sequelize, DataTypes),
+  Fertilizer: Fertilizer(sequelize, DataTypes),
+  UserUpiDetails: UserUpiDetails(sequelize, DataTypes),
+  UserBankDetails: UserBankDetails(sequelize, DataTypes),
+  UserDocuments: UserDocuments(sequelize, DataTypes),
+  OtpVerification: OtpVerification(sequelize, DataTypes),
+  // Inventory dashboard models
+  InventoryAccessory: InventoryAccessory(sequelize, DataTypes),
+  InventoryDrone: InventoryDrone(sequelize, DataTypes),
+  InventoryShipment: InventoryShipment(sequelize, DataTypes),
+  MaintenanceLog: MaintenanceLog(sequelize, DataTypes),
+  Vendor: Vendor(sequelize, DataTypes),
+
+  // Pilot maintenance models
+  PilotMaintenanceTask: PilotMaintenanceTask(sequelize, DataTypes),
+  PilotMaintenanceChecklist: PilotMaintenanceChecklist(sequelize, DataTypes),
+  PilotMaintenanceAttachment: PilotMaintenanceAttachment(sequelize, DataTypes),
 };
+
+// 🪛 Pilot Maintenance Associations 🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛
+db.PilotMaintenanceTask.hasMany(db.PilotMaintenanceChecklist, {
+  foreignKey: 'task_id',
+  as: 'checklist',
+});
+db.PilotMaintenanceChecklist.belongsTo(db.PilotMaintenanceTask, {
+  foreignKey: 'task_id',
+  as: 'task',
+});
+
+db.PilotMaintenanceTask.hasMany(db.PilotMaintenanceAttachment, {
+  foreignKey: 'task_id',
+  as: 'attachments',
+});
+db.PilotMaintenanceAttachment.belongsTo(db.PilotMaintenanceTask, {
+  foreignKey: 'task_id',
+  as: 'task',
+});
+
+db.MaintenanceLog.belongsTo(db.PilotMaintenanceTask, {
+  foreignKey: 'pilot_task_id',
+  as: 'pilot_task',
+});
+db.PilotMaintenanceTask.hasOne(db.MaintenanceLog, {
+  foreignKey: 'pilot_task_id',
+  as: 'maintenance_log',
+});
+
+db.PilotMaintenanceTask.belongsTo(db.Drone1, {
+  foreignKey: 'drone_id',
+  as: 'drone',
+});
+
+db.PilotMaintenanceTask.belongsTo(db.User, {
+  foreignKey: 'pilot_id',
+  as: 'pilotUser',
+});
+
+db.PilotMaintenanceTask.belongsTo(db.User, {
+  foreignKey: 'engineer_id',
+  as: 'engineerUser',
+});
 
 // Export a promise that resolves once all tables are synced.
 // server.js awaits this before running the super-admin bootstrap.
 export const syncPromise = sequelize
   .sync({ alter: false })
   .then(() => {
-    console.log('✅ All models were synchronized successfully.');
+    logger.info('✅ All models were synchronized successfully.');
   })
   .catch((err) => {
-    console.error('❌ Sync error', err);
+    logger.error('❌ Sync error', err);
     throw err;
   });
 

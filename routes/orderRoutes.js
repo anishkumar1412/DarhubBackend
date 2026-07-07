@@ -10,6 +10,8 @@ import {
   getOrders,
   updateWork,
   upload,
+  verifyOrderOTP,
+  resendOrderOTP,
 } from "../controllers/Admin.controller.js";
 import {
   filterOrders,
@@ -23,6 +25,7 @@ import {
   assignWork,
   updateDailyLogDrone,
   deleteDailyLog,
+  getDroneAvailabilityForBooking,
 } from "../controllers/availabilityController.js";
 import { authenticate } from "../middleware/authMiddleware.js";
 
@@ -37,6 +40,8 @@ orderRouter.post("/filter-orders",            filterOrders);
 orderRouter.post("/filterOrder",              filterOrders);   // legacy alias
 orderRouter.post("/updateOrder",              updateOrder);
 orderRouter.post("/deleteOrder",              deleteOrderById);
+orderRouter.post("/verify-otp",               verifyOrderOTP);
+orderRouter.post("/resend-otp",               resendOrderOTP);
 
 // ── Crops ────────────────────────────────────────────────────────────
 orderRouter.get("/crops/list", getAllCropsForSelect);
@@ -44,6 +49,7 @@ orderRouter.get("/crops/list", getAllCropsForSelect);
 // ── Availability & assignment ─────────────────────────────────────────
 // Step 1 — open Assign or Edit modal
 orderRouter.post("/calendar-availability", getCalendarAvailability);
+orderRouter.post("/drone-availability", getDroneAvailabilityForBooking);
 
 // Step 2a — New assignment (or add more dates to existing)
 orderRouter.post("/assign-work/:booking_id", assignWork);
