@@ -51,7 +51,7 @@ import pilotMaintenanceRouter from "./routes/pilotMaintenanceRoutes.js";
 
 const app = express();
 const PORT = process.env.PORT || 5678;
-const HOST = "localhost";
+const HOST = "0.0.0.0";
 
 // ── Middlewares ───────────────────────────────────────────────────
 app.use(helmet());
