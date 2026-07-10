@@ -76,9 +76,12 @@ import InventoryAccessory from './InventoryAccessory.js';
 import InventoryDrone from './InventoryDrone.js';
 import InventoryShipment from './InventoryShipment.js';
 import MaintenanceLog from './MaintenanceLog.js';
-import PurchaseOrder from './PurchaseOrder.js';
+
 import Vendor from './Vendor.js';
-import SalesOrder from './SalesOrder.js';
+import VendorAddress from './VendorAddress.js';
+import VendorBusinessKyc from './VendorBusinessKyc.js';
+import VendorBankDetails from './VendorBankDetails.js';
+
 
 // ── Pilot maintenance models ─────────────────────────────────────
 import PilotMaintenanceTask from './PilotMaintenanceTask.js';
@@ -208,6 +211,9 @@ const db = {
   MaintenanceLog: MaintenanceLog(sequelize, DataTypes),
   PurchaseOrder: PurchaseOrder(sequelize, DataTypes),
   Vendor: Vendor(sequelize, DataTypes),
+  VendorAddress: VendorAddress(sequelize, DataTypes),
+  VendorBusinessKyc: VendorBusinessKyc(sequelize, DataTypes),
+  VendorBankDetails: VendorBankDetails(sequelize, DataTypes),
   SalesOrder: SalesOrder(sequelize, DataTypes),
 
   // Pilot maintenance models

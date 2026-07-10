@@ -42,16 +42,15 @@ import inventoryRouter     from "./routes/inventoryRoutes.js";
 
 // ── Services / bootstrap ──────────────────────────────────────────
 import { verifyEmailConnection } from "./services/email.service.js";
-<<<<<<< HEAD
-import { bootstrapSuperAdmin } from "./bootstrap/superAdmin.bootstrap.js";
-=======
 import { bootstrapSuperAdmin }   from "./bootstrap/superAdmin.bootstrap.js";
 import droneStatusRouter   from "./routes/droneStatus.routes.js";   // ← NEW
 
 // Pilot maintenance
 import pilotMaintenanceRouter from "./routes/pilotMaintenanceRoutes.js";
 
->>>>>>> 57db33b73037736565fcc0730ab667ce41a3bb86
+// Vendor management
+import vendorRouter from "./routes/vendorRoutes.js";
+
 
 const app = express();
 const PORT = process.env.PORT || 5678;
@@ -142,6 +141,9 @@ app.use('/api/inventory', droneStatusRouter);
 // Pilot maintenance task form
 app.use('/api/pilot/maintenance', pilotMaintenanceRouter);
 
+// Vendor management
+app.use('/api/vendors', vendorRouter);
+
 // ── Global error handler ──────────────────────────────────────────
 app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
@@ -150,15 +152,9 @@ app.use((err, req, res, next) => {
 
   const isProduction = process.env.NODE_ENV === 'production';
   return res.status(statusCode).json({
-<<<<<<< HEAD
-    success: false,
-    message: err.message || 'Internal Server Error',
-    errors: err.errors || [],
-=======
     success:  false,
     message:  isProduction && statusCode === 500 ? 'Internal Server Error' : err.message,
     errors:   isProduction ? undefined : (err.errors || []),
->>>>>>> 57db33b73037736565fcc0730ab667ce41a3bb86
   });
 });
 
