@@ -23,7 +23,7 @@ import {
   updateDroneStatus,
   resetDailyStatus,
   getActivePilots,
-} from "../controllers/droneStatus.controller.js";
+} from "../controllers/DroneStatus.controller.js";
 
 const router = express.Router();
 
