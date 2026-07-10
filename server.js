@@ -186,6 +186,21 @@ const server = app.listen(PORT, HOST, async () => {
     console.error("❌ Failed to synchronize database tables:", syncErr);
   }
   await bootstrapSuperAdmin();
+
+  // ── Self-Ping to Keep Render Free Tier Awake ───────────────────────
+  if (process.env.NODE_ENV === 'development') {
+    const PING_INTERVAL = 14 * 60 * 1000; // 14 minutes
+    const PING_URL = 'https://darhubbackend.onrender.com';
+
+    setInterval(async () => {
+      try {
+        const response = await fetch(PING_URL);
+        console.log(`[Self-Ping] Successfully pinged ${PING_URL}. Status: ${response.status}`);
+      } catch (err) {
+        console.error(`[Self-Ping] Failed to ping ${PING_URL}:`, err.message);
+      }
+    }, PING_INTERVAL);
+  }
 });
 
 // ── Graceful Shutdown ─────────────────────────────────────────────
