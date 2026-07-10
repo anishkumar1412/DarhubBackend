@@ -76,7 +76,16 @@ import InventoryAccessory from './InventoryAccessory.js';
 import InventoryDrone from './InventoryDrone.js';
 import InventoryShipment from './InventoryShipment.js';
 import MaintenanceLog from './MaintenanceLog.js';
+<<<<<<< HEAD
 import Vendor from './Vendor.js';
+=======
+
+import Vendor from './Vendor.js';
+import VendorAddress from './VendorAddress.js';
+import VendorBusinessKyc from './VendorBusinessKyc.js';
+import VendorBankDetails from './VendorBankDetails.js';
+
+>>>>>>> 97afd87e400d625576914ee638f11570197fef88
 
 // ── Pilot maintenance models ─────────────────────────────────────
 import PilotMaintenanceTask from './PilotMaintenanceTask.js';
@@ -205,6 +214,13 @@ const db = {
   InventoryShipment: InventoryShipment(sequelize, DataTypes),
   MaintenanceLog: MaintenanceLog(sequelize, DataTypes),
   Vendor: Vendor(sequelize, DataTypes),
+<<<<<<< HEAD
+=======
+  VendorAddress: VendorAddress(sequelize, DataTypes),
+  VendorBusinessKyc: VendorBusinessKyc(sequelize, DataTypes),
+  VendorBankDetails: VendorBankDetails(sequelize, DataTypes),
+  SalesOrder: SalesOrder(sequelize, DataTypes),
+>>>>>>> 97afd87e400d625576914ee638f11570197fef88
 
   // Pilot maintenance models
   PilotMaintenanceTask: PilotMaintenanceTask(sequelize, DataTypes),
@@ -268,3 +284,6 @@ export const syncPromise = sequelize
   });
 
 export default db;
+
+
+// this is the comment to chekc the 

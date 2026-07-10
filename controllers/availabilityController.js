@@ -613,7 +613,7 @@ export const getDroneAvailabilityForBooking = async (req, res) => {
       return res.status(400).json({ message: "state, district, and block are required" });
     }
 
-    // 1. Drones registered in this block (by DroneAddress)
+    // 1. Drones in this location
     const localDroneAddrs = await DroneAddress.findAll({
       where: { state, district, block, is_active: true },
       attributes: ["drone_id"],
@@ -627,60 +627,17 @@ export const getDroneAvailabilityForBooking = async (req, res) => {
         success: true,
         calendar_data: {},
         total_drones: 0,
-        message: "No drones available in this location",
+        message: "No drones available in this location"
       });
     }
 
-    // 2. Fetch full drone records with pilot/copilot user IDs
-    const droneRecords = await Drone1.findAll({
-      where: { id: localDroneIds, is_active: true },
-      attributes: ["id", "name", "model", "acres_per_day", "pilot_user_id", "co_pilot_user_id"],
-      raw: true,
-    });
-
-    // 3. Batch-fetch all crew users in one query
-    const crewUserIds = [
-      ...new Set(
-        droneRecords.flatMap((d) =>
-          [d.pilot_user_id, d.co_pilot_user_id].filter(Boolean)
-        )
-      ),
-    ];
-
-    const [crewUsers, crewProfiles] = await Promise.all([
-      crewUserIds.length
-        ? User.findAll({
-          where: { id: crewUserIds },
-          attributes: ["id", "username", "mobile_number"],
-          raw: true,
-        })
-        : Promise.resolve([]),
-      crewUserIds.length
-        ? UserProfile.findAll({
-          where: { user_id: crewUserIds },
-          attributes: ["user_id", "first_name", "last_name"],
-          raw: true,
-        })
-        : Promise.resolve([]),
-    ]);
-
-    // Build enriched drone objects with pilot + copilot
-    const dronesWithCrew = droneRecords.map((d) => ({
-      id: d.id,
-      name: d.name || `Drone #${d.id}`,
-      model: d.model || null,
-      acres_per_day: d.acres_per_day || 5,
-      pilot: resolveUser(d.pilot_user_id, crewUsers, crewProfiles),
-      copilot: resolveUser(d.co_pilot_user_id, crewUsers, crewProfiles),
-    }));
-
-    // 4. Date window: today -> +30 days
+    // 2. Date window: today -> +30 days
     const windowStart = new Date();
     windowStart.setUTCHours(0, 0, 0, 0);
     const windowEnd = new Date(windowStart);
     windowEnd.setUTCDate(windowEnd.getUTCDate() + 30);
 
-    // 5. Busy drone logs in window
+    // 3. Busy logs in window
     const busyLogs = await SprayingDailyLogs.findAll({
       where: {
         working_date: { [Op.between]: [windowStart, windowEnd] },
@@ -698,29 +655,26 @@ export const getDroneAvailabilityForBooking = async (req, res) => {
       busyDronesByDate[ymd].add(log.drone_id);
     });
 
-    // 6. Build calendar_data — each date now includes the full available_drones list
-    //    so the frontend can show drone names + pilot/copilot for selection.
     const calendar_data = {};
     for (let i = 0; i < 30; i++) {
       const d = new Date(windowStart);
       d.setUTCDate(d.getUTCDate() + i);
       const ymd = toYMD(d);
 
-      const busyOnDate = busyDronesByDate[ymd] || new Set();
-      const availableDrones = dronesWithCrew.filter((dr) => !busyOnDate.has(dr.id));
+      const busyCount = busyDronesByDate[ymd] ? busyDronesByDate[ymd].size : 0;
+      const blocked = busyCount >= localDroneIds.length;
 
       calendar_data[ymd] = {
-        available_drones: availableDrones,          // full objects with pilot info
-        available_count: availableDrones.length,   // quick count for display
-        blocked: availableDrones.length === 0,
-        total_drones: dronesWithCrew.length,
+        blocked,
+        available_count: Math.max(0, localDroneIds.length - busyCount),
+        total_drones: localDroneIds.length
       };
     }
 
     return res.status(200).json({
       success: true,
       calendar_data,
-      total_drones: dronesWithCrew.length,
+      total_drones: localDroneIds.length
     });
 
   } catch (error) {
