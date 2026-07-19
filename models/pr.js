@@ -53,6 +53,8 @@ export const createDrone = async (req, res) => {
       water_pump_id,
       is_extension_board,
       extension_board_id,
+      pilot_user_id,
+      co_pilot_user_id,
 
       // Arrays
       drone_arms,
@@ -118,6 +120,8 @@ export const createDrone = async (req, res) => {
         water_pump_id,
         is_extension_board,
         extension_board_id,
+        pilot_user_id: pilot_user_id || null,
+        co_pilot_user_id: co_pilot_user_id || null,
       },
       { transaction }
     );
@@ -700,6 +704,8 @@ export const updateDrone = async (req, res) => {
       water_pump_id,
       is_extension_board,
       extension_board_id,
+      pilot_user_id,
+      co_pilot_user_id,
       arms,
       propellers,
       batteries,
@@ -728,6 +734,8 @@ export const updateDrone = async (req, res) => {
         water_pump_id,
         is_extension_board,
         extension_board_id,
+        pilot_user_id: pilot_user_id !== undefined ? pilot_user_id : drone.pilot_user_id,
+        co_pilot_user_id: co_pilot_user_id !== undefined ? co_pilot_user_id : drone.co_pilot_user_id,
         modified_on: new Date(), // ✅ update modify_on timestamp
       },
       { transaction }

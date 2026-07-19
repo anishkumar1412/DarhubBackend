@@ -364,7 +364,7 @@ export const getCalendarAvailability = async (req, res) => {
 export const assignWork = async (req, res) => {
   try {
     const { booking_id } = req.params;
-    const { pilot, copilot, drone_id, working_date } = req.body;
+    let { pilot, copilot, drone_id, working_date } = req.body;
 
     if (
       !booking_id ||
@@ -375,6 +375,15 @@ export const assignWork = async (req, res) => {
       return res
         .status(400)
         .json({ message: "booking_id, drone_id and working_date[] are required" });
+    }
+
+    // Fallback: If pilot or copilot is not provided, fetch them from the Drone
+    if (!pilot || !copilot) {
+      const droneDetails = await db.Drone1.findByPk(drone_id);
+      if (droneDetails) {
+        if (!pilot) pilot = droneDetails.pilot_user_id;
+        if (!copilot) copilot = droneDetails.co_pilot_user_id;
+      }
     }
 
     const sortedDates = [...working_date]

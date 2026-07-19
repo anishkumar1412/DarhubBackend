@@ -42,23 +42,15 @@ import inventoryRouter from "./routes/inventoryRoutes.js";
 
 // ── Services / bootstrap ──────────────────────────────────────────
 import { verifyEmailConnection } from "./services/email.service.js";
-<<<<<<< HEAD
 import { bootstrapSuperAdmin } from "./bootstrap/superAdmin.bootstrap.js";
 import droneStatusRouter from "./routes/droneStatus.routes.js";   // ← NEW
-=======
-import { bootstrapSuperAdmin }   from "./bootstrap/superAdmin.bootstrap.js";
-import droneStatusRouter   from "./routes/droneStatus.routes.js";   // ← NEW
->>>>>>> 97afd87e400d625576914ee638f11570197fef88
 
 // Pilot maintenance
 import pilotMaintenanceRouter from "./routes/pilotMaintenanceRoutes.js";
-
-<<<<<<< HEAD
-=======
-// Vendor management
 import vendorRouter from "./routes/vendorRoutes.js";
 
->>>>>>> 97afd87e400d625576914ee638f11570197fef88
+// Pilot work updates
+import pilotWorkRouter from "./routes/pilotWork.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 5678;
@@ -115,6 +107,8 @@ app.get("/", (req, res) => res.send("Welcome to DARHUB Backend"));
 app.use('/admin', router);
 app.use('/api', userRouter);
 app.use('/api/locations', locationRoutes);
+app.use('/api/pilot/work', pilotWorkRouter);
+
 app.use('/order', orderRouter);
 app.use('/crops', cropRouter);
 app.use('/working-days', workingDaysRouter);
@@ -160,15 +154,9 @@ app.use((err, req, res, next) => {
 
   const isProduction = process.env.NODE_ENV === 'production';
   return res.status(statusCode).json({
-<<<<<<< HEAD
     success: false,
     message: isProduction && statusCode === 500 ? 'Internal Server Error' : err.message,
     errors: isProduction ? undefined : (err.errors || []),
-=======
-    success:  false,
-    message:  isProduction && statusCode === 500 ? 'Internal Server Error' : err.message,
-    errors:   isProduction ? undefined : (err.errors || []),
->>>>>>> 97afd87e400d625576914ee638f11570197fef88
   });
 });
 
