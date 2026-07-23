@@ -338,7 +338,7 @@ export const registerUser = async (req, res) => {
     // 7. Generate JWT Token
     // -----------------------------
     const token = jwt.sign(
-      { userId: user.id, email: user.email },
+      { id: user.id, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
@@ -2890,7 +2890,7 @@ export const registerPilot = async (req, res) => {
     // 5. Generate JWT Access Token
     // -------------------------------------------------------------
     const token = jwt.sign(
-      { userId: registeredUser.id, email: registeredUser.email },
+      { id: registeredUser.id, email: registeredUser.email },
       process.env.JWT_SECRET,
       { expiresIn: "3d" }
     );
@@ -3153,7 +3153,7 @@ export const registerFarmer = async (req, res) => {
     // 5. Generate JWT Access Token
     // -------------------------------------------------------------
     const token = jwt.sign(
-      { userId: registeredUser.id, email: registeredUser.email },
+      { id: registeredUser.id, email: registeredUser.email },
       process.env.JWT_SECRET,
       { expiresIn: "3d" }
     );
