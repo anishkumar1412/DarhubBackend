@@ -3258,9 +3258,9 @@ export const sendOtp = async (req, res) => {
     });
 
     // Send Email if applicable
-    if (emailStr && emailOtp) {
-      await sendOtpEmail(emailStr, emailOtp);
-    }
+    // if (emailStr && emailOtp) {
+    //   await sendOtpEmail(emailStr, emailOtp);
+    // }
 
     // Send SMS (Dev Logger) if applicable
     if (mobileStr && mobileOtp) {
