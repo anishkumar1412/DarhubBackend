@@ -3178,6 +3178,7 @@ export const registerFarmer = async (req, res) => {
 export const sendOtp = async (req, res) => {
   try {
     const { email, mobile_number, purpose } = req.body;
+    console.log(req.body);
 
     const emailStr = email && email.trim() ? email.trim() : null;
     const mobileStr = mobile_number && String(mobile_number).trim() ? String(mobile_number).trim() : null;
@@ -3258,10 +3259,12 @@ export const sendOtp = async (req, res) => {
     });
 
     // Send Email if applicable
-    // if (emailStr && emailOtp) {
-    //   await sendOtpEmail(emailStr, emailOtp);
-    // }
+    console.log("code before sendotp");
 
+    if (emailStr && emailOtp) {
+      await sendOtpEmail(emailStr, emailOtp);
+    }
+    console.log("code after sendotp");
     // Send SMS (Dev Logger) if applicable
     if (mobileStr && mobileOtp) {
       console.log(`\n📱 [SMS OTP Logger] ───────────────────────────`);

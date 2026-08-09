@@ -76,25 +76,25 @@ export const updateOwnProfile = asyncHandler(async (req, res) => {
 // ── GET /api/admin/account/admins ─────────────────────────────────
 export const listAdmins = asyncHandler(async (req, res) => {
   const users = await User.findAll({
-    where:      { user_type: 2 },
+    where: { user_type: 2 },
     attributes: ['id', 'email', 'username', 'createdAt'],
-    order:      [['createdAt', 'DESC']],
+    order: [['createdAt', 'DESC']],
   });
 
   const data = await Promise.all(
     users.map(async (u) => {
-      const profile  = await AdminProfile.findOne({ where: { user_id: u.id } });
+      const profile = await AdminProfile.findOne({ where: { user_id: u.id } });
       const userRole = await UserRole.findOne({ where: { user_id: u.id } });
-      const role     = userRole ? await MasterRole.findByPk(userRole.role_id) : null;
+      const role = userRole ? await MasterRole.findByPk(userRole.role_id) : null;
 
       return {
-        id:          u.id,
-        email:       u.email,
-        full_name:   profile?.full_name || u.username,
-        role:        role?.role_name || null,
+        id: u.id,
+        email: u.email,
+        full_name: profile?.full_name || u.username,
+        role: role?.role_name || null,
         is_verified: profile?.is_verified || false,
-        last_login:  profile?.last_login || null,
-        createdAt:   u.createdAt,
+        last_login: profile?.last_login || null,
+        createdAt: u.createdAt,
       };
     })
   );
@@ -107,24 +107,24 @@ export const getAdminById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   const user = await User.findOne({
-    where:      { id, user_type: 2 },
+    where: { id, user_type: 2 },
     attributes: ['id', 'email', 'username', 'createdAt'],
   });
   if (!user) throw new ApiError(404, `Admin user ${id} not found`);
 
-  const profile  = await AdminProfile.findOne({ where: { user_id: id } });
+  const profile = await AdminProfile.findOne({ where: { user_id: id } });
   const userRole = await UserRole.findOne({ where: { user_id: id } });
-  const role     = userRole ? await MasterRole.findByPk(userRole.role_id) : null;
+  const role = userRole ? await MasterRole.findByPk(userRole.role_id) : null;
 
   return res.status(200).json(
     new ApiResponse(200, {
-      id:          user.id,
-      email:       user.email,
-      full_name:   profile?.full_name || user.username,
-      role:        role ? { id: role.id, role_name: role.role_name } : null,
+      id: user.id,
+      email: user.email,
+      full_name: profile?.full_name || user.username,
+      role: role ? { id: role.id, role_name: role.role_name } : null,
       is_verified: profile?.is_verified || false,
-      last_login:  profile?.last_login || null,
-      createdAt:   user.createdAt,
+      last_login: profile?.last_login || null,
+      createdAt: user.createdAt,
     }, 'Admin fetched successfully')
   );
 });
@@ -178,7 +178,7 @@ export const resendSetupEmail = asyncHandler(async (req, res) => {
   );
 
   await profile.update({
-    setup_token:            hashed,
+    setup_token: hashed,
     setup_token_expires_at: expiresAt,
   });
 
