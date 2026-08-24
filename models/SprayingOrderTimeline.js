@@ -1,18 +1,28 @@
 import { DataTypes } from 'sequelize';
-import sequelize from "./index.js"
-
 import AuditFields from './auditFields.js';
+import { OrderStatusEnum } from '../utils/enums.js';
 
-const SprayingDailyLogs = (sequelize, DataTypes) => sequelize.define('SprayingDailyLogs', {
-  drone_id:DataTypes.INTEGER,// NEWLY ADDED 16-12-2025
-  spraying_work_id: DataTypes.UUID,
-  status_id: DataTypes.INTEGER,
-  working_date: DataTypes.DATE,
-  pilot_user_id: DataTypes.INTEGER,
-  co_pilot_user_id: DataTypes.INTEGER,
+const SprayingOrderTimeline = (sequelize, DataTypes) => sequelize.define('SprayingOrderTimeline', {
+  timeline_id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true,
+  },
+  booking_id: {
+    type: DataTypes.UUID,
+    allowNull: false,
+  },
+  order_status: {
+    type: DataTypes.ENUM(...Object.values(OrderStatusEnum)),
+    allowNull: false,
+  },
+  remarks: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
   ...AuditFields,
 }, {
-  tableName: 'SPRAYING_DAILY_LOGS',
+  tableName: 'SPRAYING_ORDER_TIMELINE',
 });
 
-export default SprayingDailyLogs;
+export default SprayingOrderTimeline;

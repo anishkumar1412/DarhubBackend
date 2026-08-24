@@ -1,11 +1,17 @@
 import express from "express";
-import { deleteUser, loginUser, registerUser, updateUserProfile, filterUsers, refreshAccessToken, getUserById, getUsersForBooking, getUserByEmail, registerPilot, registerFarmer, sendOtp, verifyOtp, updatePilot, updateFarmer, addUserAddress } from "../controllers/Admin.controller.js";
-import { authenticate } from "../middleware/authMiddleware.js";
+import { deleteUser, loginUser, registerUser, updateUserProfile, filterUsers, refreshAccessToken, getMe, getUserById, getUsersForBooking, getUserByEmail, registerPilot, registerFarmer, sendOtp, verifyOtp, updatePilot, updateFarmer, addUserAddress } from "../controllers/Admin.controller.js";
+import { authenticate, verifyRefreshToken } from "../middleware/authMiddleware.js";
 import upload from "../middleware/upload.js";
 import { getUsersByRole, getUserAddresses } from "../controllers/UserQuery.controller.js";
+import { getPilotProfile } from "../controllers/pilotProfile.controller.js";
 
 
 const userRouter = express.Router();
+
+userRouter.get("/me", authenticate, getMe);
+userRouter.get("/user/me", authenticate, getMe);
+
+userRouter.get("/user/pilot/profile", authenticate, getPilotProfile);
 
 userRouter.post("/otp/send-otp", sendOtp);
 userRouter.post("/otp/verify-otp", verifyOtp);
@@ -37,7 +43,7 @@ userRouter.put("/user/farmer-edit", authenticate, upload.single("profile_image")
 userRouter.post("/login", loginUser);
 userRouter.post("/deleteUser", authenticate, deleteUser);
 userRouter.put("/updateprofile", updateUserProfile);
-userRouter.post("/refresh-token", refreshAccessToken);
+userRouter.post("/refresh-token", verifyRefreshToken, refreshAccessToken);
 
 // get user api 
 userRouter.get("/get-user/:user_id", getUserById);

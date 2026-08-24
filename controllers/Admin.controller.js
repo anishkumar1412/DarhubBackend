@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from "uuid";
 import multer from "multer";
 import { uploadToCloudinary } from "../middleware/upload.js";
 import { sendOtpEmail } from "../services/email.service.js";
+import { OrderStatusEnum } from "../utils/enums.js";
+import { updateOrderStatus } from "../utils/orderUtils.js";
 
 
 
@@ -364,19 +366,39 @@ export const registerUser = async (req, res) => {
 
 
 export const loginUser = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, mobile_number, identifier, password } = req.body;
 
   try {
-    // 1. Find user by email
-    const user = await User.findOne({ where: { email } });
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    const inputIdentifier = (email || mobile_number || identifier || "").trim();
+    if (!inputIdentifier || !password) {
+      return res.status(400).json({ success: false, message: "Email/Mobile and password are required" });
     }
 
-    // 2. Compare passwords
+    // 1. Find user by email or mobile_number
+    const user = await User.findOne({
+      where: {
+        [db.Sequelize.Op.or]: [
+          db.Sequelize.where(
+            db.Sequelize.fn('LOWER', db.Sequelize.col('email')),
+            inputIdentifier.toLowerCase()
+          ),
+          { mobile_number: inputIdentifier }
+        ]
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    if (!user.password) {
+      return res.status(400).json({ success: false, message: "Password not set for this account. Please reset password or activate account." });
+    }
+
+    // 2. Compare passwords using bcrypt
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ message: "Invalid password" });
+      return res.status(401).json({ success: false, message: "Invalid password" });
     }
 
     // 3. Generate Access Token
@@ -393,8 +415,12 @@ export const loginUser = async (req, res) => {
       { expiresIn: "7d" }
     );
 
+    // Store refresh token in user table
+    await user.update({ refresh_token: refreshToken });
+
     // 5. Send tokens to client
     res.json({
+      success: true,
       message: "Login successful",
       token: accessToken,
       refreshToken: refreshToken,
@@ -402,12 +428,14 @@ export const loginUser = async (req, res) => {
         id: user.id,
         email: user.email,
         username: user.username,
+        user_type: user.user_type
       },
     });
 
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({
+      success: false,
       message: "Login failed",
       error: error.message,
     });
@@ -1203,31 +1231,86 @@ export const filterUsers = async (req, res) => {
 
 
 
-export const refreshAccessToken = (req, res) => {
-  const { token } = req.body; // refresh token from client
-
+export const refreshAccessToken = async (req, res) => {
   try {
-    // Verify the refresh token using the secret
-    const payload = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
+    const userId = req.user?.id || req.user?.userId;
 
-    // Optionally check if user exists
-    // const user = await User.findOne({ where: { id: payload.id } });
+    // 1. Find user in DB
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
 
-    // Generate new access token
+    // 2. Generate new access token
     const newAccessToken = jwt.sign(
-      { id: payload.id, email: payload.email },
+      { id: user.id, email: user.email },
       process.env.JWT_SECRET,
-      { expiresIn: "1h" }
+      { expiresIn: "3d" }
     );
 
-    res.json({
-      message: "Access token refreshed",
+    // 3. Generate new refresh token
+    const newRefreshToken = jwt.sign(
+      { id: user.id, email: user.email },
+      process.env.JWT_REFRESH_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // 4. Update refresh token in User table
+    await user.update({ refresh_token: newRefreshToken });
+
+    // 5. Return response
+    return res.json({
+      success: true,
+      message: "Access token and refresh token renewed successfully",
       token: newAccessToken,
+      refreshToken: newRefreshToken,
     });
 
   } catch (error) {
-    console.error("Refresh token error:", error);
-    return res.status(403).json({ message: "Invalid or expired refresh token" });
+    console.error("Refresh token controller error:", error);
+    return res.status(500).json({ success: false, message: "Failed to renew tokens", error: error.message });
+  }
+};
+
+
+export const getMe = async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Unauthorized. Token payload missing user ID." });
+    }
+
+    const user = await User.findByPk(userId, {
+      attributes: { exclude: ["password", "refresh_token"] }
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const profile = await db.UserProfile.findOne({ where: { user_id: user.id } });
+
+    res.json({
+      success: true,
+      message: "Token is valid",
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        mobile_number: user.mobile_number,
+        user_type: user.user_type,
+        is_superuser: user.is_superuser,
+        isMobileVerify: user.isMobileVerify,
+        isEmailVerify: user.isEmailVerify,
+        user_ref_id: user.user_ref_id,
+        created_at: user.created_on || user.createdAt,
+        profile: profile || null
+      }
+    });
+
+  } catch (error) {
+    console.error("getMe error:", error);
+    res.status(500).json({ success: false, message: "Failed to verify token / fetch user info", error: error.message });
   }
 };
 
@@ -1612,7 +1695,7 @@ export const createOrder = async (req, res) => {
       cupon_id: 13,
       discount,
       user_id: final_user_id,
-      order_status: "Pending OTP",
+      order_status: OrderStatusEnum.ORDER_PLACED,
       is_paid: false,
       transcation_id: null,
       booking_otp: bookingOtp,
@@ -1622,6 +1705,13 @@ export const createOrder = async (req, res) => {
 
       // 🔥 IMPORTANT FIX
       created_by: final_user_id,
+    });
+
+    await db.SprayingOrderTimeline.create({
+      booking_id: bookingId,
+      order_status: OrderStatusEnum.ORDER_PLACED,
+      remarks: 'Order Placed',
+      created_by: final_user_id
     });
 
     // Create order address
@@ -1793,10 +1883,8 @@ export const verifyOrderOTP = async (req, res) => {
       return res.status(400).json({ message: "Invalid OTP" });
     }
 
-    await order.update({
-      order_status: "Pending", // Change from "Pending OTP" to "Pending"
-      booking_otp: null
-    });
+    await updateOrderStatus(booking_id, OrderStatusEnum.WAITING_FOR_CONFIRMATION, "OTP Verified");
+    await order.update({ booking_otp: null });
 
     return res.status(200).json({ message: "OTP verified successfully, order created" });
   } catch (error) {
@@ -1900,10 +1988,13 @@ export const updateOrder = async (req, res) => {
       cupon_id: cupon_id || order.cupon_id,
       discount: discount || order.discount,
       user_id: user_id || order.user_id,
-      order_status: order_status || order.order_status,
       is_paid: is_paid !== undefined ? is_paid : order.is_paid,
       transcation_id: transcation_id || order.transcation_id,
     });
+
+    if (order_status && order_status !== order.order_status) {
+      await updateOrderStatus(booking_id, order_status, "Status updated by admin");
+    }
 
     // Update or create address
     if (address) {
@@ -2961,16 +3052,19 @@ export const registerFarmer = async (req, res) => {
       return res.status(400).json({ success: false, error: "Mobile number is required" });
     }
 
-    // Mobile validation: 10 digits
-    const mobileStr = String(mobile_number).trim();
+    // Mobile validation: 10 digits (strip country code prefix if present)
+    let mobileStr = String(mobile_number).replace(/\D/g, '');
+    if (mobileStr.length > 10) {
+      mobileStr = mobileStr.slice(-10);
+    }
     if (!/^\d{10}$/.test(mobileStr)) {
       return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
     }
 
-    // Email regex validation with @ and .com
-    const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
+    // Standard email regex validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
     if (!emailRegex.test(email.trim())) {
-      return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
+      return res.status(400).json({ success: false, error: "Invalid email format" });
     }
 
     if (email.trim().toLowerCase() === mobileStr.toLowerCase()) {
@@ -2984,17 +3078,24 @@ export const registerFarmer = async (req, res) => {
       return res.status(400).json({ success: false, error: "At least email or mobile verification must be completed first." });
     }
 
-    // Role validation: Role check (Farmer ID 10)
-    // Dynamic lookup: Check if role with ID 10 exists with name 'Farmer' (case insensitive)
-    const targetRoleId = role ? Number(role) : 10;
-    const farmerRole = await db.MasterRole.findOne({
-      where: {
-        id: targetRoleId,
-        role_name: { [db.Sequelize.Op.iLike]: 'Farmer' }
-      }
-    });
+    // Dynamic Role Lookup: find by role ID if provided, else find by name 'Farmer', or fallback create
+    let farmerRole = null;
+    if (role) {
+      farmerRole = await db.MasterRole.findByPk(Number(role));
+    }
     if (!farmerRole) {
-      return res.status(400).json({ success: false, error: "Role validation failed: 'Farmer' role with designated ID is not configured in the database" });
+      farmerRole = await db.MasterRole.findOne({
+        where: {
+          role_name: { [db.Sequelize.Op.iLike]: 'Farmer' }
+        }
+      });
+    }
+    if (!farmerRole) {
+      farmerRole = await db.MasterRole.create({
+        role_name: 'Farmer',
+        role_desc: 'Farmer user role',
+        is_active: true
+      });
     }
 
     // Check duplication: email and mobile checks

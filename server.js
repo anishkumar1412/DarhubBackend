@@ -25,6 +25,7 @@ import userRouter from "./routes/user.routes.js";
 import locationRoutes from "./routes/locationRoutes.js";
 import orderRouter from "./routes/orderRoutes.js";
 import cropRouter from "./routes/cropRoutes.js";
+import { initCronJobs } from './cron/jobs.js';
 import workingDaysRouter from "./routes/workingDaysRoutes.js";
 import fertilizerRouter from "./routes/fertilizerRoutes.js";
 import warehouseRouter from "./routes/warehouseRoutes.js";
@@ -51,6 +52,9 @@ import vendorRouter from "./routes/vendorRoutes.js";
 
 // Pilot work updates
 import pilotWorkRouter from "./routes/pilotWork.routes.js";
+
+// Farmer-facing booking API
+import farmerRouter from "./routes/farmerRoutes.js";
 
 const app = express();
 const PORT = process.env.PORT || 5678;
@@ -89,6 +93,7 @@ app.use('/admin', apiLimiter);
 app.use('/order', apiLimiter);
 app.use('/crops', apiLimiter);
 app.use('/inventory', apiLimiter);
+app.use('/api/farmer', apiLimiter);
 
 // ── Swagger ───────────────────────────────────────────────────────
 if (process.env.NODE_ENV !== 'production') {
@@ -146,6 +151,9 @@ app.use('/api/pilot/maintenance', pilotMaintenanceRouter);
 // Vendor management
 app.use('/api/vendors', vendorRouter);
 
+// Farmer-facing booking API
+app.use('/api/farmer', farmerRouter);
+
 // ── Global error handler ──────────────────────────────────────────
 app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
@@ -172,6 +180,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // ── Start ─────────────────────────────────────────────────────────
 const server = app.listen(PORT, HOST, async () => {
+  initCronJobs();
   logger.info(`🚀 Server running on http://${HOST}:${PORT}`);
   await verifyEmailConnection();
   await syncPromise;
@@ -190,6 +199,8 @@ const server = app.listen(PORT, HOST, async () => {
     await db.UserDocuments.sync({ alter: true });
     await db.OtpVerification.sync({ alter: true });
     console.log("✅ User profile, address, bank, UPI, Document, and OTP verification tables synchronized successfully.");
+    await db.SprayingOrderExtras.sync({ alter: true });
+    console.log("✅ SprayingOrderExtras table synchronized successfully.");
   } catch (syncErr) {
     console.error("❌ Failed to synchronize database tables:", syncErr);
   }

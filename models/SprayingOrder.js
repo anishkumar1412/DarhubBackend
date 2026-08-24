@@ -2,6 +2,7 @@ import { DataTypes } from 'sequelize';
 import sequelize from "./index.js"
 
 import AuditFields from './auditFields.js';
+import { OrderStatusEnum } from '../utils/enums.js';
 
 const SprayingOrder = (sequelize, DataTypes) => sequelize.define('SprayingOrder', {
    booking_id: {
@@ -19,7 +20,10 @@ const SprayingOrder = (sequelize, DataTypes) => sequelize.define('SprayingOrder'
   cupon_id: DataTypes.INTEGER,
   discount: DataTypes.FLOAT,
   user_id: DataTypes.INTEGER,
-  order_status: DataTypes.STRING,
+  order_status: {
+    type: DataTypes.ENUM(...Object.values(OrderStatusEnum)),
+    defaultValue: OrderStatusEnum.ORDER_PLACED,
+  },
   is_paid: DataTypes.BOOLEAN,
   transcation_id: DataTypes.STRING,
   booking_otp: DataTypes.STRING,

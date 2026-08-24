@@ -19,6 +19,7 @@ import {
   getOrderById,
   getOrdersByUserId,
   updateOrder,
+  getAllOrderStatuses,
 } from "../controllers/Booking.controller.js";
 import {
   getCalendarAvailability,
@@ -34,6 +35,7 @@ const orderRouter = express.Router();
 // ── Orders ──────────────────────────────────────────────────────────
 orderRouter.post("/create-order",             createOrder);
 orderRouter.get("/get-order",                 getOrders);
+orderRouter.get("/statuses",                  getAllOrderStatuses);
 orderRouter.get("/getOrderById/:booking_id",  getOrderById);
 orderRouter.get("/getOrderByUserId/:user_id", getOrdersByUserId);
 orderRouter.post("/filter-orders",            filterOrders);

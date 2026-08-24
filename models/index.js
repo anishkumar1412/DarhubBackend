@@ -43,6 +43,8 @@ import SprayingWorkAssignee from './SprayingWorkAsignee.js';
 import SprayingDailyLogs from './SprayingDailyLogs.js';
 import AuditLog from './AuditLog.js';
 import SprayingOrderComment from './SprayingOrderComment.js';
+import SprayingOrderTimeline from './SprayingOrderTimeline.js';
+import SprayingOrderExtras from './SprayingOrderExtras.js';
 import MasterWorkingDays from './MasterWorkingdays.js';
 import Fertilizer from './Fertilizer.js';
 import UserUpiDetails from './UserUpiDetails.js';
@@ -184,6 +186,8 @@ const db = {
   SprayingDailyLogs: SprayingDailyLogs(sequelize, DataTypes),
   AuditLog: AuditLog(sequelize, DataTypes),
   SprayingOrderComment: SprayingOrderComment(sequelize, DataTypes),
+  SprayingOrderTimeline: SprayingOrderTimeline(sequelize, DataTypes),
+  SprayingOrderExtras: SprayingOrderExtras(sequelize, DataTypes),
 
   // Inventory & Orders models
   Category: Category(sequelize, DataTypes),
@@ -262,6 +266,26 @@ db.PilotMaintenanceTask.belongsTo(db.User, {
 db.PilotMaintenanceTask.belongsTo(db.User, {
   foreignKey: 'engineer_id',
   as: 'engineerUser',
+});
+
+// Spraying Order Timeline Associations
+db.SprayingOrder.hasMany(db.SprayingOrderTimeline, {
+  foreignKey: 'booking_id',
+  as: 'timelines',
+});
+db.SprayingOrderTimeline.belongsTo(db.SprayingOrder, {
+  foreignKey: 'booking_id',
+  as: 'order',
+});
+
+// SprayingOrderExtras — one-to-one extension for farmer-app data
+db.SprayingOrder.hasOne(db.SprayingOrderExtras, {
+  foreignKey: 'booking_id',
+  as: 'extras',
+});
+db.SprayingOrderExtras.belongsTo(db.SprayingOrder, {
+  foreignKey: 'booking_id',
+  as: 'order',
 });
 
 // Export a promise that resolves once all tables are synced.

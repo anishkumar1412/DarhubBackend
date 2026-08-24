@@ -2,6 +2,8 @@ import { Op } from 'sequelize';
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import db from "../models/index.js";
+import { OrderStatusEnum } from "../utils/enums.js";
+import { updateOrderStatus } from "../utils/orderUtils.js";
 
 const {
   User,
@@ -521,10 +523,13 @@ export const updateOrder = async (req, res) => {
       cupon_id: cupon_id ?? order.cupon_id,
       discount: discount ?? order.discount,
       user_id: user_id ?? order.user_id,
-      order_status: order_status ?? order.order_status,
       is_paid: is_paid ?? order.is_paid,
       transcation_id: transcation_id ?? order.transcation_id,
     });
+
+    if (order_status && order_status !== order.order_status) {
+      await updateOrderStatus(booking_id, order_status, "Status updated by Booking Controller");
+    }
 
     // ✅ Update or recreate address
     if (address) {
@@ -1155,6 +1160,7 @@ export const getOrderById = async (req, res) => {
 export const getOrdersByUserId = async (req, res) => {
   try {
     const { user_id } = req.params;
+    const { order_status } = req.query;
 
     if (!user_id) {
       return res.status(400).json({ message: "user_id is required" });
@@ -1206,13 +1212,91 @@ export const getOrdersByUserId = async (req, res) => {
       return res.status(200).json([]);
     }
 
+    // Prepare where clause with optional status filtering
+    const whereClause = { booking_id: [...bookingIds] };
+    if (order_status) {
+      const statuses = order_status.split(',').map(s => s.trim());
+      whereClause.order_status = { [Op.in]: statuses };
+    }
+
     // 4️⃣ Fetch full orders
     const orders = await SprayingOrder.findAll({
-      where: { booking_id: [...bookingIds] },
+      where: whereClause,
       order: [["createdAt", "DESC"]],
     });
 
-    res.status(200).json(orders.map(cleanData));
+    // Helper to get user name
+    const getUserName = async (uId) => {
+      if (!uId) return null;
+      const user = await UserProfile.findOne({ where: { user_id: uId } });
+      return user ? `${user.first_name || ""} ${user.last_name || ""}`.trim() : null;
+    };
+
+    // 5️⃣ Enrich each order with names and nested details
+    const enrichedOrders = await Promise.all(
+      orders.map(async (o) => {
+        const orderData = cleanData(o);
+        const bookingId = orderData.booking_id;
+
+        // Fetch Crop Name
+        let crop_name = null;
+        if (orderData.crop_type_id) {
+          const crop = await MasterCrop.findOne({ where: { id: orderData.crop_type_id } });
+          crop_name = crop ? crop.name : null;
+        }
+
+        // Fetch Address
+        const address = await SprayingOrderAddress.findOne({ where: { order_id: bookingId } });
+        let fullAddress = null;
+        if (address) {
+          const [state, district, block] = await Promise.all([
+            MasterState.findOne({ where: { id: address.state } }),
+            MasterDistrict.findOne({ where: { id: address.district } }),
+            MasterBlock.findOne({ where: { id: address.block } }),
+          ]);
+          fullAddress = {
+            ...cleanData(address),
+            state_name: state ? state.state_name : null,
+            district_name: district ? district.district_name : null,
+            block_name: block ? block.block_name : null,
+          };
+        }
+
+        // Fetch Assignees
+        const assigneeRecords = await SprayingWorkAssignee.findAll({ where: { booking_id: bookingId } });
+        const cleanAssignees = await Promise.all(
+          assigneeRecords.map(async (assignee) => {
+            const aData = cleanData(assignee);
+            const [pilot_name, co_pilot_name, drone] = await Promise.all([
+              getUserName(aData.pilot_user_id),
+              getUserName(aData.co_pilot_user_id),
+              Drone1.findOne({ where: { id: aData.drone_id } }),
+            ]);
+            const { pilot_user_id, co_pilot_user_id, drone_id, ...rest } = aData;
+            return {
+              ...rest,
+              pilot_name,
+              co_pilot_name,
+              drone_name: drone?.drone_name || drone?.name || drone?.droneName || null,
+            };
+          })
+        );
+
+        // Created by User Name
+        const created_by_name = await getUserName(orderData.created_by) || await getUserName(orderData.user_id);
+
+        const { crop_type_id, ...restOrderData } = orderData;
+        return {
+          ...restOrderData,
+          crop_name,
+          created_by_name,
+          address: fullAddress,
+          assignees: cleanAssignees,
+        };
+      })
+    );
+
+    res.status(200).json(enrichedOrders);
 
   } catch (error) {
     console.error("Error fetching orders by user:", error);
@@ -1648,4 +1732,15 @@ export const getAvailablePilotsForDates = async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 };
- 
+
+export const getAllOrderStatuses = (req, res) => {
+  try {
+    const statuses = Object.values(OrderStatusEnum).map(status => ({
+      value: status,
+      label: status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+    }));
+    res.status(200).json({ success: true, statuses });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};

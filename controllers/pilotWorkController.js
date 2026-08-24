@@ -3,6 +3,8 @@ import multer from 'multer';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import db from "../models/index.js";
+import { OrderStatusEnum } from '../utils/enums.js';
+import { updateOrderStatus } from '../utils/orderUtils.js';
 
 const {
   SprayingOrder,
@@ -178,8 +180,8 @@ export const startDay = async (req, res) => {
     });
 
     // Update order status to "in progress" if it was pending
-    if (order.order_status === "pending" || order.order_status === "confirmed" || order.order_status === "assigned") {
-      await order.update({ order_status: "in progress" });
+    if (order.order_status === OrderStatusEnum.ORDER_PLACED || order.order_status === OrderStatusEnum.ORDER_ACCEPTED || order.order_status === OrderStatusEnum.WAITING_FOR_CONFIRMATION) {
+      await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_STARTED, "Pilot started the day", pilot_user_id);
     }
 
     res.status(201).json({
@@ -408,7 +410,7 @@ export const endDay = async (req, res) => {
     if (allDaysComplete && allLogs.length > 0) {
       const order = await SprayingOrder.findByPk(booking_id);
       if (order) {
-        await order.update({ order_status: "work_done" });
+        await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_COMPLETED, "All days completed by pilot");
       }
     }
 
@@ -639,8 +641,8 @@ export const confirmAssignment = async (req, res) => {
 
     // ── 10. Update order status if pilot confirmed ───────────────────
     if (hasAnyAccepted &&
-        (order.order_status === 'assigned' || order.order_status === 'pending')) {
-      await order.update({ order_status: 'confirmed' });
+        (order.order_status === OrderStatusEnum.WAITING_FOR_CONFIRMATION || order.order_status === OrderStatusEnum.ORDER_PLACED)) {
+      await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_ACCEPTED, "Pilot confirmed assignment", pilot_user_id);
     }
 
     // ── 11. Build summary of all dates for this pilot ────────────────
