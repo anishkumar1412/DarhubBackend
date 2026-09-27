@@ -268,17 +268,38 @@ const buildFullDetail = async (order) => {
   // Location name resolution
   let locationStr = null;
   let fieldName   = null;
+  let stateObj    = null;
+  let districtObj = null;
+  let blockObj    = null;
   if (address) {
     const [state, district, block] = await Promise.all([
       address.state    ? MasterState.findOne({ where: { id: address.state } })    : null,
       address.district ? MasterDistrict.findOne({ where: { id: address.district } }) : null,
       address.block    ? MasterBlock.findOne({ where: { id: address.block } })    : null,
     ]);
+    stateObj    = state;
+    districtObj = district;
+    blockObj    = block;
     const village = address.village || '';
     const blockName = block?.block_name || '';
     fieldName   = village || blockName || address.address1 || 'Field';
     locationStr = `${fieldName} • ${totalAcres} Acres`;
   }
+
+  const formattedAddress = address ? {
+    state: address.state,
+    district: address.district,
+    block: address.block,
+    state_name: stateObj?.state_name || null,
+    district_name: districtObj?.district_name || null,
+    block_name: blockObj?.block_name || null,
+    village: address.village,
+    lane1: address.lane1 || address.address1 || null,
+    lane2: address.lane2 || address.address2 || null,
+    address1: address.address1 || address.lane1 || null,
+    address2: address.address2 || address.lane2 || null,
+    pincode: address.pincode || null,
+  } : null;
 
   // Timeline
   const timeline = buildTimeline(timelineRows);
@@ -384,25 +405,37 @@ const buildFullDetail = async (order) => {
   return {
     // ── Core ───────────────────────────────────────────────────────
     id:                      bookingId,
+    booking_id:              bookingId,
     title:                   serviceTitle,
     status:                  appStatus,
+    order_status:            order.order_status,
+    booking_otp:             order.booking_otp || null,
     scheduled_date:          scheduledDate,
     scheduled_time_window:   scheduledWindow,
     created_at:              fmtDateTime(order.created_on),
+    start_date:              order.start_date,
+    end_date:                order.end_date,
+    num_of_days:             order.num_of_days || 1,
     location:                locationStr,
+    total_price:             totalPrice,
     total_amount_formatted:  totalAmountFormatted,
     pilot_assignment_status: pilotAssignmentStatus,
     drone_assignment_status: droneAssignmentStatus,
     cancellation_reason:     extras?.cancellation_reason ?? null,
     farmer_rating:           extras?.farmer_rating ?? null,
+    is_paid:                 order.is_paid || false,
     payment_status:          payment.status_label,
+    address:                 formattedAddress,
 
     // ── Farm ──────────────────────────────────────────────────────
     farm: {
-      field_name:   fieldName,
-      area_name:    fieldName,
-      total_acres:  totalAcres,
-      crop_name:    cropName,
+      field_name:    fieldName,
+      area_name:     fieldName,
+      total_acres:   totalAcres,
+      land_in_acers: totalAcres,
+      crop_name:     cropName,
+      crop_type_id:  order.crop_type_id,
+      address:       formattedAddress,
     },
 
     // ── Pilot (null when PENDING) ──────────────────────────────────
@@ -441,6 +474,35 @@ const buildFullDetail = async (order) => {
   };
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  HELPER: retrieve all user IDs associated with this farmer (e.g. by mobile number)
+//  Guarantees farmer sees all bookings associated with their account/phone number
+//  while strictly preventing access to any other farmer's bookings.
+// ─────────────────────────────────────────────────────────────────────────────
+const getFarmerUserIds = async (farmer_user_id) => {
+  const ids = [farmer_user_id];
+  try {
+    const farmerUser = await User.findByPk(farmer_user_id);
+    if (farmerUser?.mobile_number) {
+      const cleanMobile = farmerUser.mobile_number.toString().replace(/\D/g, '').slice(-10);
+      if (cleanMobile) {
+        const matched = await User.findAll({
+          where: {
+            mobile_number: { [Op.like]: `%${cleanMobile}` },
+          },
+          attributes: ['id'],
+        });
+        matched.forEach((u) => {
+          if (!ids.includes(u.id)) ids.push(u.id);
+        });
+      }
+    }
+  } catch (err) {
+    console.error('getFarmerUserIds error:', err);
+  }
+  return ids;
+};
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  GET /api/farmer/bookings?status=UPCOMING&page=1&limit=10
 //
@@ -464,14 +526,17 @@ export const getFarmerBookings = async (req, res) => {
       PENDING:   [OrderStatusEnum.ORDER_PLACED, OrderStatusEnum.WAITING_FOR_CONFIRMATION],
       UPCOMING:  [OrderStatusEnum.ORDER_ACCEPTED, OrderStatusEnum.ORDER_STARTED],
       ONGOING:   [OrderStatusEnum.JOB_STARTED, OrderStatusEnum.JOB_ENDED],
+      COMPLETED: [OrderStatusEnum.ORDER_COMPLETED, OrderStatusEnum.WAITING_FOR_PAYMENT, OrderStatusEnum.PAYMENT_SUCCESSFUL],
       ORDER_COMPLETED: [OrderStatusEnum.ORDER_COMPLETED, OrderStatusEnum.WAITING_FOR_PAYMENT, OrderStatusEnum.PAYMENT_SUCCESSFUL],
       CANCELLED: [OrderStatusEnum.ORDER_CANCELLED, OrderStatusEnum.ORDER_REJECTED],
     };
 
+    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
+
     const whereClause = {
       [Op.or]: [
-        { user_id: farmer_user_id },
-        { created_by: farmer_user_id },
+        { user_id: { [Op.in]: farmerUserIds } },
+        { created_by: { [Op.in]: farmerUserIds } },
       ],
     };
 
@@ -531,16 +596,36 @@ export const getFarmerBookings = async (req, res) => {
 
         return {
           id:                    bookingId,
+          booking_id:            bookingId,
           title:                 extras?.service_title || `${cropName} Spraying`,
+          crop_name:             cropName,
+          crop_type_id:          order.crop_type_id,
           status:                appStatus,
+          order_status:          order.order_status,
           scheduled_date:        fmtDate(order.start_date),
           scheduled_time_window: extras?.scheduled_time || null,
           location:              locationStr,
+          total_acres:           order.land_in_acers || 0,
+          land_in_acers:         order.land_in_acers || 0,
           pilot_name:            pilotName,
           drone_name:            droneName,
+          total_price:           totalPrice,
           total_amount_formatted: `₹${totalPrice.toLocaleString('en-IN')}`,
+          is_paid:               order.is_paid || false,
           payment_status:        order.is_paid ? 'Paid' : 'Pending',
+          booking_otp:           order.booking_otp || null,
           created_at:            fmtDateTime(order.created_on),
+          start_date:            order.start_date,
+          end_date:              order.end_date,
+          address: address ? {
+            state: address.state,
+            district: address.district,
+            block: address.block,
+            village: address.village,
+            lane1: address.lane1 || address.address1 || null,
+            lane2: address.lane2 || address.address2 || null,
+            pincode: address.pincode || null,
+          } : null,
         };
       })
     );
@@ -577,12 +662,14 @@ export const getFarmerBookingDetail = async (req, res) => {
       return res.status(400).json({ success: false, message: 'booking_id is required' });
     }
 
+    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
+
     const order = await SprayingOrder.findOne({
       where: {
         booking_id,
         [Op.or]: [
-          { user_id: farmer_user_id },
-          { created_by: farmer_user_id },
+          { user_id: { [Op.in]: farmerUserIds } },
+          { created_by: { [Op.in]: farmerUserIds } },
         ],
       },
     });
@@ -619,10 +706,15 @@ export const rateFarmerBooking = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Rating must be between 1 and 5' });
     }
 
+    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
+
     const order = await SprayingOrder.findOne({
       where: {
         booking_id,
-        [Op.or]: [{ user_id: farmer_user_id }, { created_by: farmer_user_id }],
+        [Op.or]: [
+          { user_id: { [Op.in]: farmerUserIds } },
+          { created_by: { [Op.in]: farmerUserIds } },
+        ],
       },
     });
 
@@ -700,10 +792,15 @@ export const cancelFarmerBooking = async (req, res) => {
     const { booking_id } = req.params;
     const { cancellation_reason } = req.body;
 
+    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
+
     const order = await SprayingOrder.findOne({
       where: {
         booking_id,
-        [Op.or]: [{ user_id: farmer_user_id }, { created_by: farmer_user_id }],
+        [Op.or]: [
+          { user_id: { [Op.in]: farmerUserIds } },
+          { created_by: { [Op.in]: farmerUserIds } },
+        ],
       },
     });
 
@@ -771,10 +868,15 @@ export const rescheduleFarmerBooking = async (req, res) => {
       return res.status(400).json({ success: false, message: 'new_date is required' });
     }
 
+    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
+
     const order = await SprayingOrder.findOne({
       where: {
         booking_id,
-        [Op.or]: [{ user_id: farmer_user_id }, { created_by: farmer_user_id }],
+        [Op.or]: [
+          { user_id: { [Op.in]: farmerUserIds } },
+          { created_by: { [Op.in]: farmerUserIds } },
+        ],
       },
     });
 

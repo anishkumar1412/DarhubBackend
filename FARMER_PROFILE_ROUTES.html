@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Farmer Profile API Routes</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm 18mm; }
+    :root { --ink: #17212b; --muted: #5e6b75; --line: #d9e1e6; --accent: #0d6b62; --soft: #eef7f5; --code: #f5f7f8; }
+    * { box-sizing: border-box; }
+    body { color: var(--ink); font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; line-height: 1.45; margin: 0; }
+    h1 { color: var(--accent); font-size: 28pt; line-height: 1.05; margin: 0 0 8pt; }
+    h2 { border-bottom: 2px solid var(--accent); color: var(--accent); font-size: 16pt; margin: 24pt 0 10pt; padding-bottom: 4pt; }
+    h3 { color: #26424d; font-size: 11.5pt; margin: 16pt 0 6pt; }
+    p { margin: 5pt 0 8pt; }
+    .cover { border-bottom: 8px solid var(--accent); margin-bottom: 20pt; padding: 24pt 0 18pt; }
+    .subtitle { color: var(--muted); font-size: 13pt; margin: 0 0 16pt; }
+    .meta { color: var(--muted); font-size: 9pt; }
+    .notice { background: var(--soft); border-left: 4px solid var(--accent); margin: 12pt 0; padding: 9pt 12pt; }
+    .route { background: #f8fbfb; border: 1px solid var(--line); border-radius: 4px; margin: 12pt 0 16pt; padding: 10pt 12pt; page-break-inside: avoid; }
+    .method { color: white; display: inline-block; font-size: 9pt; font-weight: 700; letter-spacing: .5pt; margin-right: 8pt; padding: 3pt 7pt; }
+    .get { background: #1769aa; } .patch { background: #9a5b08; }
+    .path { font-family: Consolas, monospace; font-size: 11pt; font-weight: 700; }
+    code, pre { font-family: Consolas, "Courier New", monospace; }
+    pre { background: var(--code); border: 1px solid var(--line); border-radius: 3px; font-size: 8.2pt; line-height: 1.35; overflow-wrap: anywhere; padding: 9pt; white-space: pre-wrap; }
+    table { border-collapse: collapse; margin: 7pt 0 12pt; width: 100%; }
+    th { background: var(--soft); color: #214b46; text-align: left; }
+    th, td { border: 1px solid var(--line); padding: 5pt 6pt; vertical-align: top; }
+    td:first-child, th:first-child { white-space: nowrap; }
+    .small { color: var(--muted); font-size: 8.5pt; }
+    .page-break { page-break-before: always; }
+    ul { margin-top: 4pt; padding-left: 18pt; }
+    li { margin: 3pt 0; }
+    .footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 8pt; margin-top: 24pt; padding-top: 6pt; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="meta">DARHUB Backend | Mobile integration reference</div>
+    <h1>Farmer Profile API Routes</h1>
+    <p class="subtitle">Complete request, response, authentication, update, and error reference</p>
+    <p class="meta">Base path: <code>/api/farmer</code> | Route source: <code>routes/farmerRoutes.js</code> | Last verified: 2026-09-06</p>
+  </section>
+
+  <h2>1. Overview</h2>
+  <p>The farmer profile router exposes two routes. Both routes require the authenticated farmer's access token and resolve the farmer from the JWT subject. The profile tabs are selected with the <code>tab</code> query parameter.</p>
+  <div class="notice"><strong>Authentication:</strong> send <code>Authorization: Bearer &lt;access_token&gt;</code> on every request. The access token is verified with the backend JWT secret. Tokens are issued by the authentication flow and must not be hard-coded in the app.</div>
+
+  <table>
+    <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+    <tr><td>GET</td><td><code>/api/farmer/profile</code></td><td>Read one profile view selected by <code>tab</code>.</td></tr>
+    <tr><td>PATCH</td><td><code>/api/farmer/profile</code></td><td>Update the personal profile view. Currently only <code>tab=personal</code> is supported.</td></tr>
+  </table>
+
+  <h2>2. Shared Errors</h2>
+  <table>
+    <tr><th>Status</th><th>When</th><th>Response</th></tr>
+    <tr><td>401</td><td>Authorization header is missing, malformed, expired, or invalid.</td><td><pre>{
+  "success": false,
+  "code": "NO_TOKEN",
+  "message": "No token provided. Unauthorized!"
+}</pre> or the same shape with <code>code</code> <code>TOKEN_EXPIRED</code>.</td></tr>
+    <tr><td>400</td><td><code>tab</code> is missing or not supported.</td><td><pre>{ "success": false, "message": "tab query parameter is required" }</pre><p class="small">For GET, an unknown value returns <code>Invalid tab specified</code>. For PATCH, unsupported values return <code>Updating this tab is not supported yet</code>.</p></td></tr>
+    <tr><td>404</td><td>The user from the token does not exist.</td><td><pre>{ "success": false, "message": "Farmer not found" }</pre></td></tr>
+    <tr><td>500</td><td>Unexpected database or server error.</td><td><pre>{ "success": false, "message": "Internal Server Error", "error": "..." }</pre></td></tr>
+  </table>
+
+  <h2>3. GET Profile</h2>
+  <div class="route"><span class="method get">GET</span><span class="path">/api/farmer/profile?tab={tab}</span><p>Returns the authenticated farmer's selected profile view.</p></div>
+  <table>
+    <tr><th>Query parameter</th><th>Required</th><th>Allowed values</th></tr>
+    <tr><td><code>tab</code></td><td>Yes</td><td><code>main</code>, <code>personal</code>, <code>farm</code>, <code>address</code>, <code>bank</code></td></tr>
+  </table>
+  <p>All successful GET responses use this envelope:</p>
+  <pre>{
+  "success": true,
+  "data": { ... }
+}</pre>
+
+  <h3>3.1 Main overview</h3>
+  <p>Request: <code>GET /api/farmer/profile?tab=main</code></p>
+  <pre>{
+  "success": true,
+  "data": {
+    "user_info": {
+      "name": "Ramesh Yadav",
+      "verified": true,
+      "mobile_number": "9876543210",
+      "email": "ramesh@example.com",
+      "member_since": "2024-03-12T10:00:00.000Z",
+      "account_type": "Farmer",
+      "profile_image": "https://example.com/profile.jpg",
+      "location": "Gondal, Rajkot"
+    },
+    "farm_summary": {
+      "total_acres": "21.0",
+      "active_crops": 3,
+      "total_fields": 2,
+      "upcoming_bookings": 2
+    }
+  }
+}</pre>
+  <p class="small"><strong>Implementation note:</strong> <code>total_acres</code> is currently calculated as non-primary address count multiplied by 10.5 and returned as a string. <code>active_crops</code> is a derived placeholder. <code>verified</code> is currently always <code>true</code>.</p>
+
+  <h3>3.2 Personal information</h3>
+  <p>Request: <code>GET /api/farmer/profile?tab=personal</code></p>
+  <pre>{
+  "success": true,
+  "data": {
+    "personal_info": {
+      "first_name": "Ramesh",
+      "last_name": "Yadav",
+      "mobile_number": "9876543210",
+      "email": "ramesh@example.com",
+      "dob": "1990-05-12T00:00:00.000Z",
+      "profile_image": "https://example.com/profile.jpg",
+      "gender": "Male",
+      "marital_status": "Married",
+      "education": "Graduate",
+      "occupation": "Farmer"
+    },
+    "address_details": {
+      "lane_1": "Main Road",
+      "lane_2": "",
+      "state": 1,
+      "district": 5,
+      "block": 12,
+      "village": "Gondal",
+      "pincode": "360311"
+    }
+  }
+}</pre>
+  <p class="small">If no primary address exists, <code>address_details</code> is <code>null</code>. Gender, marital status, education, and occupation are currently hard-coded response values.</p>
+
+  <h3>3.3 Farm information</h3>
+  <p>Request: <code>GET /api/farmer/profile?tab=farm</code></p>
+  <pre>{
+  "success": true,
+  "data": {
+    "farms": [
+      {
+        "id": 102,
+        "farm_name": "Yadav Farm",
+        "farm_type": "Owner",
+        "total_land_owned": 12.5,
+        "irrigation_type": "Borewell",
+        "primary_soil_type": "Clay Loam",
+        "water_source": "Borewell",
+        "description": "Agricultural farm focused on essential crops.",
+        "address": {
+          "lane_1": "Gondal Road", "lane_2": "", "state": 1,
+          "district": 5, "block": 12, "village": "Gondal", "pincode": "360311"
+        },
+        "fields": [
+          { "name": "Field A", "acres": 5, "soil_type": "Clay Loam", "irrigation": "Borewell" },
+          { "name": "Field B", "acres": 7.5, "soil_type": "Sandy Loam", "irrigation": "Drip" }
+        ]
+      }
+    ]
+  }
+}</pre>
+  <p class="small">Only non-primary <code>UserAddress</code> records are mapped to farms. Farm and field attributes shown above are currently placeholder values generated by the controller; <code>farm_name</code> is derived from <code>lane_1</code>.</p>
+
+  <div class="page-break"></div>
+  <h3>3.4 Address list</h3>
+  <p>Request: <code>GET /api/farmer/profile?tab=address</code></p>
+  <pre>{
+  "success": true,
+  "data": {
+    "addresses": [
+      {
+        "id": 101,
+        "is_primary": true,
+        "type": "Home",
+        "lane_1": "House No 5, Gondal",
+        "lane_2": "",
+        "state": 1,
+        "district": 5,
+        "block": 12,
+        "village": "Gondal",
+        "pincode": "360001"
+      },
+      {
+        "id": 102,
+        "is_primary": false,
+        "type": "Farm/Warehouse",
+        "lane_1": "Aji GIDC",
+        "lane_2": "",
+        "state": 1,
+        "district": 5,
+        "block": 12,
+        "village": "Gondal",
+        "pincode": "360003"
+      }
+    ]
+  }
+}</pre>
+
+  <h3>3.5 Bank and UPI details</h3>
+  <p>Request: <code>GET /api/farmer/profile?tab=bank</code></p>
+  <pre>{
+  "success": true,
+  "data": {
+    "bank_accounts": [
+      {
+        "id": 15,
+        "bank_name": "State Bank of India",
+        "acc_holder_name": "Ramesh Yadav",
+        "acc_number": "XXXX XXXX 1234",
+        "ifsc_code": "SBIN0001234",
+        "is_primary": true,
+        "passbook_image_url": "https://example.com/passbook.jpg"
+      }
+    ],
+    "upi_details": [
+      { "id": 8, "upi_id": "rameshyadav@sbi" }
+    ]
+  }
+}</pre>
+  <p class="small">Bank and UPI arrays are returned from the database. Treat bank account numbers as sensitive data and mask them in the UI.</p>
+
+  <h2>4. PATCH Profile</h2>
+  <div class="route"><span class="method patch">PATCH</span><span class="path">/api/farmer/profile?tab=personal</span><p>Partially updates the authenticated farmer's personal details and primary address.</p></div>
+  <p>Content type: <code>application/json</code>. The request body may include either object or both objects. Omitted properties are preserved.</p>
+  <pre>{
+  "personal_info": {
+    "first_name": "Ramesh",
+    "last_name": "Yadav",
+    "mobile_number": "9876543210",
+    "email": "ramesh@example.com",
+    "dob": "1990-05-12",
+    "profile_image": "https://example.com/profile.jpg"
+  },
+  "address_details": {
+    "lane_1": "Main Road",
+    "lane_2": "Near Market",
+    "state": 1,
+    "district": 5,
+    "block": 12,
+    "village": "Gondal",
+    "pincode": "360311"
+  }
+}</pre>
+  <table>
+    <tr><th>Body object</th><th>Supported fields</th><th>Behavior</th></tr>
+    <tr><td><code>personal_info</code></td><td><code>first_name</code>, <code>last_name</code>, <code>mobile_number</code>, <code>email</code>, <code>dob</code>, <code>profile_image</code></td><td>Updates <code>User</code> for mobile/email and <code>UserProfile</code> for the remaining supported fields.</td></tr>
+    <tr><td><code>address_details</code></td><td><code>lane_1</code>, <code>lane_2</code>, <code>state</code>, <code>district</code>, <code>block</code>, <code>village</code>, <code>pincode</code></td><td>Updates the existing primary address, or creates one with <code>is_primary: true</code> when none exists.</td></tr>
+  </table>
+  <p>Successful response:</p>
+  <pre>{
+  "success": true,
+  "message": "Personal profile updated successfully"
+}</pre>
+  <p class="small"><strong>Current limitation:</strong> the PATCH handler does not update gender, marital status, education, occupation, bank details, UPI details, farm records, or non-primary addresses. PATCH requests using any tab other than <code>personal</code> return HTTP 400.</p>
+
+  <h2>5. Integration Checklist</h2>
+  <ul>
+    <li>Store the access token securely and attach it as a Bearer token.</li>
+    <li>Send one of the five supported GET tab values exactly as documented.</li>
+    <li>Handle <code>address_details: null</code> and empty arrays without assuming records exist.</li>
+    <li>Display <code>total_acres</code> as a string for now; do not assume it is a numeric field.</li>
+    <li>Mask account numbers in the UI and avoid logging bank responses.</li>
+    <li>For profile edits, send only the fields being changed and use <code>tab=personal</code>.</li>
+    <li>After a successful PATCH, refresh the personal tab because the update response is message-only.</li>
+  </ul>
+
+  <div class="footer">Prepared from the live route and controller implementation. Sample names, IDs, URLs, and values are illustrative unless marked as implementation-derived.</div>
+</body>
+</html>

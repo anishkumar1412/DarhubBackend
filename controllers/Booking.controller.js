@@ -1174,9 +1174,14 @@ export const getOrdersByUserId = async (req, res) => {
       return rest;
     };
 
-    // 1️⃣ Orders CREATED by user
+    // 1️⃣ Orders CREATED by user or assigned to user (as farmer)
     const createdOrders = await SprayingOrder.findAll({
-      where: { created_by: user_id },
+      where: {
+        [Op.or]: [
+          { user_id: user_id },
+          { created_by: user_id },
+        ],
+      },
     });
 
     // 2️⃣ Orders where user is PILOT / CO-PILOT (Assignee)
@@ -1348,10 +1353,35 @@ export const filterOrders = async (req, res) => {
       orderWhere.is_active = filters.is_active;
 
     // ---------------- USER-ID SCOPE FILTER (NEW) ----------------
-    if (filters.user_id) {
-      // 1️⃣ Orders created by user
+    let effectiveUserId = filters.user_id || req.user?.id;
+    if (!effectiveUserId && req.headers?.authorization && req.headers.authorization.startsWith("Bearer ")) {
+      try {
+        const token = req.headers.authorization.split(" ")[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded?.id) {
+          if (decoded.user_type === 1 || decoded.user_type === 3) {
+            effectiveUserId = decoded.id;
+          } else if (decoded.user_type === 2) {
+            // Admin user: do not scope automatically unless filters.user_id provided
+          } else {
+            const userRec = await User.findOne({ where: { id: decoded.id }, attributes: ["id", "user_type"] });
+            if (userRec && userRec.user_type !== 2) {
+              effectiveUserId = userRec.id;
+            }
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    if (effectiveUserId) {
+      // 1️⃣ Orders created by user or where user is farmer
       const createdOrders = await SprayingOrder.findAll({
-        where: { created_by: filters.user_id },
+        where: {
+          [Op.or]: [
+            { user_id: effectiveUserId },
+            { created_by: effectiveUserId },
+          ],
+        },
         attributes: ["booking_id"],
       });
 
@@ -1359,8 +1389,8 @@ export const filterOrders = async (req, res) => {
       const assigneeOrders = await SprayingWorkAssignee.findAll({
         where: {
           [Op.or]: [
-            { pilot_user_id: filters.user_id },
-            { co_pilot_user_id: filters.user_id },
+            { pilot_user_id: effectiveUserId },
+            { co_pilot_user_id: effectiveUserId },
           ],
         },
         attributes: ["booking_id"],
@@ -1370,8 +1400,8 @@ export const filterOrders = async (req, res) => {
       const dailyLogOrders = await SprayingDailyLogs.findAll({
         where: {
           [Op.or]: [
-            { pilot_user_id: filters.user_id },
-            { co_pilot_user_id: filters.user_id },
+            { pilot_user_id: effectiveUserId },
+            { co_pilot_user_id: effectiveUserId },
           ],
         },
         attributes: ["spraying_work_id"],

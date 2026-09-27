@@ -1,0 +1,490 @@
+{
+	"info": {
+		"_postman_id": "8d3e2b1a-9f4c-4e89-a1b2-c3d4e5f6a7b8",
+		"name": "Darhub Farmer App API Collection",
+		"description": "Comprehensive Postman collection for Darhub Farmer App. Includes authentication, profile management, crops discovery, order creation, order listing, status tabs, detailed order tracking, and order actions.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:5678",
+			"type": "string"
+		},
+		{
+			"key": "farmerToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refreshToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "userId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "bookingId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "cropTypeId",
+			"value": "1",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "1. Authentication",
+			"item": [
+				{
+					"name": "1.1 Farmer Registration",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var jsonData = pm.response.json();",
+									"if (jsonData.token) {",
+									"    pm.collectionVariables.set('farmerToken', jsonData.token);",
+									"}",
+									"if (jsonData.user_id) {",
+									"    pm.collectionVariables.set('userId', jsonData.user_id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "first_name", "value": "Ramesh", "type": "text" },
+								{ "key": "last_name", "value": "Patel", "type": "text" },
+								{ "key": "email", "value": "ramesh.farmer@example.com", "type": "text" },
+								{ "key": "password", "value": "Password@123", "type": "text" },
+								{ "key": "mobile_number", "value": "9876543210", "type": "text" },
+								{ "key": "dob", "value": "1985-05-15", "type": "text" },
+								{ "key": "isMobileVerify", "value": "true", "type": "text" },
+								{ "key": "isverifyEmail", "value": "true", "type": "text" },
+								{
+									"key": "address",
+									"value": "[{\"state\": 1, \"district\": 1, \"block\": 1, \"village\": \"Sonpur\", \"lane1\": \"North Road\", \"pincode\": \"800001\", \"is_primary\": true}]",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/user/farmer-registration",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "user", "farmer-registration"]
+						}
+					}
+				},
+				{
+					"name": "1.2 Farmer Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var jsonData = pm.response.json();",
+									"if (jsonData.token) {",
+									"    pm.collectionVariables.set('farmerToken', jsonData.token);",
+									"}",
+									"if (jsonData.refreshToken) {",
+									"    pm.collectionVariables.set('refreshToken', jsonData.refreshToken);",
+									"}",
+									"if (jsonData.user && jsonData.user.id) {",
+									"    pm.collectionVariables.set('userId', jsonData.user.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"mobile_number\": \"9876543210\",\n    \"password\": \"Password@123\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/login",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "login"]
+						}
+					}
+				},
+				{
+					"name": "1.3 Verify Token (Me API)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/user/me",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "user", "me"]
+						}
+					}
+				},
+				{
+					"name": "1.4 Refresh Token",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var jsonData = pm.response.json();",
+									"if (jsonData.token) {",
+									"    pm.collectionVariables.set('farmerToken', jsonData.token);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{refreshToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/refresh-token",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "refresh-token"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "2. Farmer Profile",
+			"item": [
+				{
+					"name": "2.1 Profile - Main Tab",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/profile?tab=main",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "profile"],
+							"query": [{ "key": "tab", "value": "main" }]
+						}
+					}
+				},
+				{
+					"name": "2.2 Profile - Personal Tab",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/profile?tab=personal",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "profile"],
+							"query": [{ "key": "tab", "value": "personal" }]
+						}
+					}
+				},
+				{
+					"name": "2.3 Profile - Farm Tab",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/profile?tab=farm",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "profile"],
+							"query": [{ "key": "tab", "value": "farm" }]
+						}
+					}
+				},
+				{
+					"name": "2.4 Profile - Address Tab",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/profile?tab=address",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "profile"],
+							"query": [{ "key": "tab", "value": "address" }]
+						}
+					}
+				},
+				{
+					"name": "2.5 Profile - Bank Tab",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/profile?tab=bank",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "profile"],
+							"query": [{ "key": "tab", "value": "bank" }]
+						}
+					}
+				},
+				{
+					"name": "2.6 Update Profile (Personal Tab)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"first_name\": \"Ramesh\",\n    \"last_name\": \"Patel\",\n    \"whatsapp_number\": \"9876543210\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/profile?tab=personal",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "profile"],
+							"query": [{ "key": "tab", "value": "personal" }]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "3. Pre-Order & Crops",
+			"item": [
+				{
+					"name": "3.1 Fetch Crops List",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var jsonData = pm.response.json();",
+									"if (jsonData.data && jsonData.data.length > 0) {",
+									"    pm.collectionVariables.set('cropTypeId', jsonData.data[0].id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/order/crops/list",
+							"host": ["{{baseUrl}}"],
+							"path": ["order", "crops", "list"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "4. Order Creation",
+			"item": [
+				{
+					"name": "4.1 Create Spraying Order",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var jsonData = pm.response.json();",
+									"if (jsonData.booking_id) {",
+									"    pm.collectionVariables.set('bookingId', jsonData.booking_id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"start_date\": \"2026-10-15\",\n    \"end_date\": \"2026-10-16\",\n    \"num_of_days\": 2,\n    \"crop_type_id\": {{cropTypeId}},\n    \"land_in_acers\": 7.5,\n    \"price\": 3750.00,\n    \"tax\": 187.50,\n    \"total_price\": 3937.50,\n    \"cupon_id\": 13,\n    \"discount\": 50.00,\n    \"user_id\": {{userId}},\n    \"farmer_details\": {\n        \"name\": \"Ramesh Patel\",\n        \"mobile\": \"9876543210\",\n        \"email\": \"ramesh.farmer@example.com\"\n    },\n    \"address\": {\n        \"state\": 1,\n        \"district\": 1,\n        \"block\": 1,\n        \"village\": \"Sonpur\",\n        \"lane1\": \"Plot 42\",\n        \"lane2\": \"East Sector\",\n        \"address1\": \"Plot 42\",\n        \"address2\": \"East Sector\",\n        \"pincode\": \"800001\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/order/create-order",
+							"host": ["{{baseUrl}}"],
+							"path": ["order", "create-order"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "5. Farmer Bookings & Orders",
+			"item": [
+				{
+					"name": "5.1 Get Booking Status Tabs",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/bookings/statuses",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "bookings", "statuses"]
+						}
+					}
+				},
+				{
+					"name": "5.2 Get Farmer Bookings List (Cards)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/bookings?status=PENDING&page=1&limit=10",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "bookings"],
+							"query": [
+								{ "key": "status", "value": "PENDING" },
+								{ "key": "page", "value": "1" },
+								{ "key": "limit", "value": "10" }
+							]
+						}
+					}
+				},
+				{
+					"name": "5.3 Get Booking Detail by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/bookings/{{bookingId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "bookings", "{{bookingId}}"]
+						}
+					}
+				},
+				{
+					"name": "5.4 Reschedule Booking",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"new_date\": \"2026-10-25\",\n    \"new_time_window\": \"09:00 AM - 11:00 AM\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/bookings/{{bookingId}}/reschedule",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "bookings", "{{bookingId}}", "reschedule"]
+						}
+					}
+				},
+				{
+					"name": "5.5 Cancel Booking",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"cancellation_reason\": \"Heavy Monsoon Rain\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/bookings/{{bookingId}}/cancel",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "bookings", "{{bookingId}}", "cancel"]
+						}
+					}
+				},
+				{
+					"name": "5.6 Rate Completed Booking",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"rating\": 5\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/farmer/bookings/{{bookingId}}/rate",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "farmer", "bookings", "{{bookingId}}", "rate"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "6. Advanced Order Querying",
+			"item": [
+				{
+					"name": "6.1 Filter Orders (Multi-Param Search)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"page\": 1,\n    \"pageSize\": 10,\n    \"orderBy\": \"created_on\",\n    \"orderType\": \"DESC\",\n    \"order_status\": \"ORDER_PLACED\",\n    \"is_paid\": false\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/order/filter-orders",
+							"host": ["{{baseUrl}}"],
+							"path": ["order", "filter-orders"]
+						}
+					}
+				},
+				{
+					"name": "6.2 Get Orders By User ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/order/getOrderByUserId/{{userId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["order", "getOrderByUserId", "{{userId}}"]
+						}
+					}
+				}
+			]
+		}
+	]
+}
