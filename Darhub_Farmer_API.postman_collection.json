@@ -66,14 +66,46 @@
 						"body": {
 							"mode": "formdata",
 							"formdata": [
-								{ "key": "first_name", "value": "Ramesh", "type": "text" },
-								{ "key": "last_name", "value": "Patel", "type": "text" },
-								{ "key": "email", "value": "ramesh.farmer@example.com", "type": "text" },
-								{ "key": "password", "value": "Password@123", "type": "text" },
-								{ "key": "mobile_number", "value": "9876543210", "type": "text" },
-								{ "key": "dob", "value": "1985-05-15", "type": "text" },
-								{ "key": "isMobileVerify", "value": "true", "type": "text" },
-								{ "key": "isverifyEmail", "value": "true", "type": "text" },
+								{
+									"key": "first_name",
+									"value": "Ramesh",
+									"type": "text"
+								},
+								{
+									"key": "last_name",
+									"value": "Patel",
+									"type": "text"
+								},
+								{
+									"key": "email",
+									"value": "ramesh.farmer@example.com",
+									"type": "text"
+								},
+								{
+									"key": "password",
+									"value": "Password@123",
+									"type": "text"
+								},
+								{
+									"key": "mobile_number",
+									"value": "9876543210",
+									"type": "text"
+								},
+								{
+									"key": "dob",
+									"value": "1985-05-15",
+									"type": "text"
+								},
+								{
+									"key": "isMobileVerify",
+									"value": "true",
+									"type": "text"
+								},
+								{
+									"key": "isverifyEmail",
+									"value": "true",
+									"type": "text"
+								},
 								{
 									"key": "address",
 									"value": "[{\"state\": 1, \"district\": 1, \"block\": 1, \"village\": \"Sonpur\", \"lane1\": \"North Road\", \"pincode\": \"800001\", \"is_primary\": true}]",
@@ -83,8 +115,14 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/user/farmer-registration",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "user", "farmer-registration"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"farmer-registration"
+							]
 						}
 					}
 				},
@@ -113,7 +151,10 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
 						],
 						"body": {
 							"mode": "raw",
@@ -121,8 +162,13 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/login",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "login"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"login"
+							]
 						}
 					}
 				},
@@ -131,12 +177,21 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/user/me",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "user", "me"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"me"
+							]
 						}
 					}
 				},
@@ -159,12 +214,20 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{refreshToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{refreshToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/refresh-token",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "refresh-token"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"refresh-token"
+							]
 						}
 					}
 				}
@@ -178,13 +241,27 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/profile?tab=main",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "profile"],
-							"query": [{ "key": "tab", "value": "main" }]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"profile"
+							],
+							"query": [
+								{
+									"key": "tab",
+									"value": "main"
+								}
+							]
 						}
 					}
 				},
@@ -193,13 +270,27 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/profile?tab=personal",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "profile"],
-							"query": [{ "key": "tab", "value": "personal" }]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"profile"
+							],
+							"query": [
+								{
+									"key": "tab",
+									"value": "personal"
+								}
+							]
 						}
 					}
 				},
@@ -208,13 +299,27 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/profile?tab=farm",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "profile"],
-							"query": [{ "key": "tab", "value": "farm" }]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"profile"
+							],
+							"query": [
+								{
+									"key": "tab",
+									"value": "farm"
+								}
+							]
 						}
 					}
 				},
@@ -223,13 +328,27 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/profile?tab=address",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "profile"],
-							"query": [{ "key": "tab", "value": "address" }]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"profile"
+							],
+							"query": [
+								{
+									"key": "tab",
+									"value": "address"
+								}
+							]
 						}
 					}
 				},
@@ -238,13 +357,27 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/profile?tab=bank",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "profile"],
-							"query": [{ "key": "tab", "value": "bank" }]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"profile"
+							],
+							"query": [
+								{
+									"key": "tab",
+									"value": "bank"
+								}
+							]
 						}
 					}
 				},
@@ -253,8 +386,14 @@
 					"request": {
 						"method": "PATCH",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
-							{ "key": "Content-Type", "value": "application/json" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
 						],
 						"body": {
 							"mode": "raw",
@@ -262,9 +401,20 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/profile?tab=personal",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "profile"],
-							"query": [{ "key": "tab", "value": "personal" }]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"profile"
+							],
+							"query": [
+								{
+									"key": "tab",
+									"value": "personal"
+								}
+							]
 						}
 					}
 				}
@@ -294,8 +444,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/order/crops/list",
-							"host": ["{{baseUrl}}"],
-							"path": ["order", "crops", "list"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"order",
+								"crops",
+								"list"
+							]
 						}
 					}
 				}
@@ -323,8 +479,14 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
-							{ "key": "Content-Type", "value": "application/json" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
 						],
 						"body": {
 							"mode": "raw",
@@ -332,8 +494,13 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/order/create-order",
-							"host": ["{{baseUrl}}"],
-							"path": ["order", "create-order"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"order",
+								"create-order"
+							]
 						}
 					}
 				}
@@ -347,12 +514,22 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/bookings/statuses",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "bookings", "statuses"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"bookings",
+								"statuses"
+							]
 						}
 					}
 				},
@@ -361,16 +538,34 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/bookings?status=PENDING&page=1&limit=10",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "bookings"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"bookings"
+							],
 							"query": [
-								{ "key": "status", "value": "PENDING" },
-								{ "key": "page", "value": "1" },
-								{ "key": "limit", "value": "10" }
+								{
+									"key": "status",
+									"value": "PENDING"
+								},
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
 							]
 						}
 					}
@@ -380,12 +575,22 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/bookings/{{bookingId}}",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "bookings", "{{bookingId}}"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"bookings",
+								"{{bookingId}}"
+							]
 						}
 					}
 				},
@@ -394,8 +599,14 @@
 					"request": {
 						"method": "PATCH",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
-							{ "key": "Content-Type", "value": "application/json" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
 						],
 						"body": {
 							"mode": "raw",
@@ -403,8 +614,16 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/bookings/{{bookingId}}/reschedule",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "bookings", "{{bookingId}}", "reschedule"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"bookings",
+								"{{bookingId}}",
+								"reschedule"
+							]
 						}
 					}
 				},
@@ -413,8 +632,14 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
-							{ "key": "Content-Type", "value": "application/json" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
 						],
 						"body": {
 							"mode": "raw",
@@ -422,8 +647,16 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/bookings/{{bookingId}}/cancel",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "bookings", "{{bookingId}}", "cancel"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"bookings",
+								"{{bookingId}}",
+								"cancel"
+							]
 						}
 					}
 				},
@@ -432,8 +665,14 @@
 					"request": {
 						"method": "PATCH",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
-							{ "key": "Content-Type", "value": "application/json" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
 						],
 						"body": {
 							"mode": "raw",
@@ -441,8 +680,16 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/farmer/bookings/{{bookingId}}/rate",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "farmer", "bookings", "{{bookingId}}", "rate"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"farmer",
+								"bookings",
+								"{{bookingId}}",
+								"rate"
+							]
 						}
 					}
 				}
@@ -456,8 +703,14 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" },
-							{ "key": "Content-Type", "value": "application/json" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
 						],
 						"body": {
 							"mode": "raw",
@@ -465,8 +718,13 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/order/filter-orders",
-							"host": ["{{baseUrl}}"],
-							"path": ["order", "filter-orders"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"order",
+								"filter-orders"
+							]
 						}
 					}
 				},
@@ -475,12 +733,21 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Authorization", "value": "Bearer {{farmerToken}}" }
+							{
+								"key": "Authorization",
+								"value": "Bearer {{farmerToken}}"
+							}
 						],
 						"url": {
 							"raw": "{{baseUrl}}/order/getOrderByUserId/{{userId}}",
-							"host": ["{{baseUrl}}"],
-							"path": ["order", "getOrderByUserId", "{{userId}}"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"order",
+								"getOrderByUserId",
+								"{{userId}}"
+							]
 						}
 					}
 				}
