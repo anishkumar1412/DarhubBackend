@@ -14,33 +14,23 @@ services:
       - key: TRUST_PROXY
         value: 1
 
-      # ── Database (link to the Render Postgres below) ───────────────
+      # ── Database — set these in the Render dashboard from your existing DB ──
       - key: DB_HOST
-        fromDatabase:
-          name: darhub-db
-          property: host
+        sync: false
       - key: DB_PORT
-        fromDatabase:
-          name: darhub-db
-          property: port
+        sync: false
       - key: DB_USER
-        fromDatabase:
-          name: darhub-db
-          property: user
+        sync: false
       - key: DB_PASSWORD
-        fromDatabase:
-          name: darhub-db
-          property: password
+        sync: false
       - key: DB_NAME
-        fromDatabase:
-          name: darhub-db
-          property: database
+        sync: false
       - key: DB_DIALECT
         value: postgres
 
       # ── Secrets — fill these in the Render dashboard after deploy ──
       - key: JWT_SECRET
-        sync: false           # Render will prompt you to enter it
+        sync: false
       - key: JWT_REFRESH_SECRET
         sync: false
       - key: SUPER_ADMIN_EMAIL
@@ -61,9 +51,3 @@ services:
         sync: false
       - key: CLOUD_SECRET
         sync: false
-
-databases:
-  - name: darhub-db
-    plan: free
-    databaseName: drone_booking_management
-    user: darhub
