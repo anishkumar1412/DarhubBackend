@@ -36,7 +36,10 @@ const envSchema = Joi.object({
   ADMIN_SETUP_EXPIRY_HOURS: Joi.number().default(24),
   ADMIN_RESET_EXPIRY_HOURS: Joi.number().default(1),
 
-  // ── Email / SMTP ─────────────────────────────────────────────
+  // ── Email ─────────────────────────────────────────────────────
+  // Option A (recommended on Render free tier): Resend API key — uses HTTPS, no SMTP ports needed.
+  RESEND_API_KEY: Joi.string().optional(),
+  // Option B: direct SMTP (works locally; Render free tier blocks ports 25/465/587).
   SMTP_HOST:          Joi.string().optional(),
   SMTP_PORT:          Joi.number().default(587),
   SMTP_USER:          Joi.string().optional(),
@@ -112,7 +115,8 @@ const env = {
   ADMIN_SETUP_EXPIRY_HOURS: envVars.ADMIN_SETUP_EXPIRY_HOURS,
   ADMIN_RESET_EXPIRY_HOURS: envVars.ADMIN_RESET_EXPIRY_HOURS,
 
-  // ── Email / SMTP ─────────────────────────────────────────────
+  // ── Email ─────────────────────────────────────────────────────
+  RESEND_API_KEY:     envVars.RESEND_API_KEY,
   SMTP_HOST:          envVars.SMTP_HOST,
   SMTP_PORT:          envVars.SMTP_PORT,
   SMTP_USER:          envVars.SMTP_USER,

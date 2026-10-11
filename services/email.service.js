@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
 import {
@@ -9,8 +10,10 @@ import {
 
 const isProduction = env.NODE_ENV === 'production';
 
-/** True when enough SMTP settings exist to actually send mail. */
-export const isEmailConfigured = () => Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
+const useResend = () => Boolean(env.RESEND_API_KEY);
+
+/** True when enough settings exist to actually send mail. */
+export const isEmailConfigured = () => useResend() || Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
 
 /**
  * A failed send, classified so callers can answer sensibly without parsing nodemailer messages.
@@ -25,7 +28,14 @@ export class EmailError extends Error {
   }
 }
 
-// ── Transporter singleton ─────────────────────────────────────────
+// ── Resend client singleton ───────────────────────────────────────
+let resendClient = null;
+const getResend = () => {
+  if (!resendClient) resendClient = new Resend(env.RESEND_API_KEY);
+  return resendClient;
+};
+
+// ── SMTP transporter singleton ────────────────────────────────────
 let transporter = null;
 
 const getTransporter = () => {
@@ -95,7 +105,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const verifyEmailConnection = async () => {
   if (!isEmailConfigured()) {
     logger.warn(
-      `[Email] SMTP is not configured (SMTP_HOST, SMTP_USER, SMTP_PASS). ${
+      `[Email] Email is not configured (set RESEND_API_KEY, or SMTP_HOST + SMTP_USER + SMTP_PASS). ${
         isProduction ? 'Emails cannot be sent: invitations, password resets and OTPs will fail.' : 'Emails will be printed to the console instead.'
       }`
     );
@@ -103,6 +113,10 @@ export const verifyEmailConnection = async () => {
   }
   if (isProduction && /localhost|127\.0\.0\.1/.test(env.ADMIN_PANEL_URL)) {
     logger.warn(`[Email] ADMIN_PANEL_URL is "${env.ADMIN_PANEL_URL}" in production: links in emails will not work for recipients.`);
+  }
+  if (useResend()) {
+    logger.info('[Email] Using Resend API (HTTPS) — no SMTP port needed.');
+    return true;
   }
   try {
     await getTransporter().verify();
@@ -131,13 +145,42 @@ const sendEmail = async ({ to, subject, html, text }) => {
 
   if (!isEmailConfigured()) {
     if (isProduction) {
-      // Pretending to succeed here would tell the user "email sent" while nothing was sent.
       throw new EmailError('EMAIL_NOT_CONFIGURED', 'Email is not configured on this server.');
     }
     logger.info(`\n📧 [Dev Email] ─────────────────────────────────\nTo:      ${recipient}\nSubject: ${subject}\n\n${text}\n────────────────────────────────────────────────`);
     return { messageId: 'dev-console' };
   }
 
+  // ── Resend (HTTPS API — works on Render free tier) ────────────
+  if (useResend()) {
+    let lastError;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const { data, error } = await getResend().emails.send({
+          from: `${env.EMAIL_FROM_NAME} <${env.EMAIL_FROM_ADDRESS}>`,
+          to: recipient,
+          subject,
+          html,
+          text,
+        });
+        if (error) throw Object.assign(new Error(error.message), { code: 'EENVELOPE' });
+        return { messageId: data.id };
+      } catch (err) {
+        lastError = err;
+        if (attempt < MAX_ATTEMPTS) {
+          logger.warn(`[Email] Resend attempt ${attempt} failed; retrying.`);
+          await sleep(750 * attempt);
+          continue;
+        }
+        break;
+      }
+    }
+    const failure = classify(lastError);
+    logger.error(`[Email] Could not send "${subject}" to ${recipient}: [${failure.code}] ${failure.message}`);
+    throw failure;
+  }
+
+  // ── SMTP fallback (local dev / non-Render deployments) ────────
   let lastError;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
@@ -164,7 +207,6 @@ const sendEmail = async ({ to, subject, html, text }) => {
   }
 
   const failure = classify(lastError);
-  // The recipient and subject only: bodies hold one-time links/codes and must never reach the logs.
   logger.error(`[Email] Could not send "${subject}" to ${recipient}: [${failure.code}] ${failure.message}`);
   throw failure;
 };
