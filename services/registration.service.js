@@ -121,16 +121,13 @@ export const lockIdentifiers = (sequelize, transaction, keys) =>
   lockKeys(sequelize, transaction, keys.filter(Boolean).map((key) => `signup:${key}`));
 
 export const findDuplicate = async ({ User }, { email, mobile }, transaction) => {
-  if (email) {
-    const byEmail = await User.findOne({ where: sqlWhere(fn('lower', col('email')), email), transaction });
-    if (byEmail) return 'User already exists with this email';
-  }
-  if (mobile) {
-    // Older rows were saved as typed ("09798297100", "+919798297100"), so look for every spelling of the number
-    const spellings = [mobile, `0${mobile}`, `91${mobile}`, `+91${mobile}`];
-    const byMobile = await User.findOne({ where: { mobile_number: { [Op.in]: spellings } }, transaction });
-    if (byMobile) return 'User already exists with this mobile number';
-  }
+  const spellings = mobile ? [mobile, `0${mobile}`, `91${mobile}`, `+91${mobile}`] : [];
+  const [byEmail, byMobile] = await Promise.all([
+    email  ? User.findOne({ where: sqlWhere(fn('lower', col('email')), email), transaction }) : null,
+    mobile ? User.findOne({ where: { mobile_number: { [Op.in]: spellings } }, transaction }) : null,
+  ]);
+  if (byEmail)  return 'User already exists with this email';
+  if (byMobile) return 'User already exists with this mobile number';
   return null;
 };
 
