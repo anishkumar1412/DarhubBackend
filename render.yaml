@@ -9,6 +9,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: EXPOSE_OTP
+        value: true           # remove this once testing is done
       - key: PORT
         value: 10000          # Render assigns its own port; this is just a fallback
       - key: TRUST_PROXY
