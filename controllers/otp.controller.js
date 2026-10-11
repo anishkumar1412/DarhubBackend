@@ -139,15 +139,20 @@ export const sendOtp = async (req, res) => {
       }, { transaction: t });
     });
 
-    try {
-      if (emailOtp) await sendOtpEmail(email, emailOtp, OTP_EXPIRY_MINUTES);
-      if (mobileOtp) await sendOtpSms(mobile, mobileOtp, OTP_EXPIRY_MINUTES);
-    } catch (deliveryError) {
-      // The code can never reach the person: remove it and let them retry at once (no cooldown)
-      await row.destroy().catch(() => {});
-      await gate.release().catch(() => {});
-      logger.error(`sendOtp: delivery failed (${deliveryError.code || deliveryError.name}): ${deliveryError.message}`);
-      return fail(res, 503, 'We could not send the verification code right now. Please try again in a few minutes.', { code: 'OTP_DELIVERY_FAILED' });
+    if (env.EXPOSE_DEV_OTPS) {
+      // Testing mode: skip delivery entirely — the OTP is returned directly in the response below
+      logger.info(`[OTP] Dev mode: skipping delivery for ${email || mobile}`);
+    } else {
+      try {
+        if (emailOtp) await sendOtpEmail(email, emailOtp, OTP_EXPIRY_MINUTES);
+        if (mobileOtp) await sendOtpSms(mobile, mobileOtp, OTP_EXPIRY_MINUTES);
+      } catch (deliveryError) {
+        // The code can never reach the person: remove it and let them retry at once (no cooldown)
+        await row.destroy().catch(() => {});
+        await gate.release().catch(() => {});
+        logger.error(`sendOtp: delivery failed (${deliveryError.code || deliveryError.name}): ${deliveryError.message}`);
+        return fail(res, 503, 'We could not send the verification code right now. Please try again in a few minutes.', { code: 'OTP_DELIVERY_FAILED' });
+      }
     }
 
     const channels = [emailOtp && 'email', mobileOtp && 'mobile number'].filter(Boolean).join(' and ');
