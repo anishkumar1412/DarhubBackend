@@ -16,6 +16,7 @@ import env from '../config/env.js';
 import { ApiResponse } from '../utils/apiResponse.js';
 import { ApiError } from '../utils/apiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import logger from '../utils/logger.js';
 import { generateOneTimeToken, buildSetupLink } from '../utils/adminToken.util.js';
 import { sendAdminSetupEmail } from '../services/email.service.js';
 
@@ -183,11 +184,14 @@ export const resendSetupEmail = asyncHandler(async (req, res) => {
   });
 
   const setupLink = buildSetupLink(raw);
-  console.log(`[Admin] Resent setup link for ${user.email}:`, setupLink);
+  if (env.NODE_ENV !== 'production') logger.info(`[Admin] Resent setup link for ${user.email}: ${setupLink}`);
 
-  sendAdminSetupEmail(user.email, profile.full_name, setupLink).catch((err) =>
-    console.error('[Email] Failed to resend setup email:', err.message)
-  );
+  // The whole point of this endpoint is delivery, so a failure is reported instead of hidden
+  try {
+    await sendAdminSetupEmail(user.email, profile.full_name, setupLink);
+  } catch (err) {
+    throw new ApiError(502, `The setup email could not be sent: ${err.message}`);
+  }
 
   return res.status(200).json(
     new ApiResponse(200, { email: user.email }, `Setup email resent to ${user.email}`)

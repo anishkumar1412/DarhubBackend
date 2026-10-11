@@ -7,6 +7,7 @@
  */
 
 import db from '../models/index.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const { PurchaseOrder, MaintenanceLog, InventoryAccessory, Vendor, InventoryShipment, Op } = db;
 
@@ -133,12 +134,12 @@ export const getAllPurchaseOrders = async (req, res) => {
     if (status) andConditions.push({ status: { [Op.like]: `%${status}%` } });
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await PurchaseOrder.findAndCountAll({
       where,
       order: [['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
     });
 
@@ -146,8 +147,8 @@ export const getAllPurchaseOrders = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllPurchaseOrders error:', err);

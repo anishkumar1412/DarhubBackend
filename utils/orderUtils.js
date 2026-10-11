@@ -7,9 +7,12 @@ import { OrderStatusEnum } from './enums.js';
  * @param {string} order_status - The new status from OrderStatusEnum.
  * @param {string} remarks - Optional remarks for the timeline entry.
  * @param {number} user_id - The ID of the user performing the action (for created_by).
+ * @param {import('sequelize').Transaction} [externalTransaction] - Join the caller's transaction instead of
+ *   opening our own, so the status change commits or rolls back together with the caller's other writes.
  */
-export const updateOrderStatus = async (booking_id, order_status, remarks = '', user_id = null) => {
-  const t = await db.sequelize.transaction();
+export const updateOrderStatus = async (booking_id, order_status, remarks = '', user_id = null, externalTransaction = null) => {
+  const ownsTransaction = !externalTransaction;
+  const t = externalTransaction ?? await db.sequelize.transaction();
   try {
     const order = await db.SprayingOrder.findOne({ where: { booking_id }, transaction: t });
     
@@ -28,10 +31,10 @@ export const updateOrderStatus = async (booking_id, order_status, remarks = '', 
       }, { transaction: t });
     }
 
-    await t.commit();
+    if (ownsTransaction) await t.commit();
     return order;
   } catch (error) {
-    await t.rollback();
+    if (ownsTransaction) await t.rollback();
     throw error;
   }
 };

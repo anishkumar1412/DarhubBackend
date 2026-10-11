@@ -54,6 +54,7 @@
  */
 
 import db from "../models/index.js";
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const { Drone1, User, UserProfile, UserRole, MasterRole, SprayingDailyLogs, Op } = db;
 
@@ -178,15 +179,15 @@ export const getAllDroneStatuses = async (req, res) => {
 
     const allDrones = await getDronesWithPilotInfo(where);
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const paginated = allDrones.slice(offset, offset + parseInt(limit));
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 50);
+    const paginated = allDrones.slice(offset, offset + clampLimit(limit, 50));
 
     return res.status(200).json({
       success: true,
       data: paginated,
       total: allDrones.length,
-      page: parseInt(page),
-      totalPages: Math.ceil(allDrones.length / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(allDrones.length / clampLimit(limit, 50)),
     });
   } catch (err) {
     console.error("getAllDroneStatuses error:", err);

@@ -4,9 +4,28 @@ import db from "../models/index.js";
 import { v4 as uuidv4 } from "uuid";
 import multer from "multer";
 import { uploadToCloudinary } from "../middleware/upload.js";
-import { sendOtpEmail } from "../services/email.service.js";
+import { randomInt } from "crypto";
+import logger from "../utils/logger.js";
+import env from "../config/env.js";
+import { ApiError } from "../utils/apiError.js";
+import {
+  normalizeEmail, isValidEmail, normalizeMobile, validatePassword, checkLocationChain,
+  findVerifiedChannels, consumeVerification, lockIdentifiers, findDuplicate, buildAddresses, parseAddressInput,
+} from "../services/registration.service.js";
+import { resolveIdentityChange, consumeIdentityVerification, isActivatedAdmin } from "../services/identity.service.js";
+import {
+  validateImage, discardUploads, uploadPilotFiles, PILOT_FILES, readBankDetails, readUpiId, readAadhar, readPan,
+} from "../services/profileInput.service.js";
+import { issueSessionTokens, refreshTokenMatches } from "../services/token.service.js";
+import { loadRoleNames, isFarmerAccount } from "../middleware/access.js";
+import { parseOrThrow } from "../middleware/validate.js";
+import { loginSchema } from "../validation/auth.schemas.js";
+import { createOrderSchema } from "../validation/order.schemas.js";
+import { farmerEditSchema } from "../validation/farmer.schemas.js";
+import { respondWithError } from "../middleware/errorHandler.js";
 import { OrderStatusEnum } from "../utils/enums.js";
 import { updateOrderStatus } from "../utils/orderUtils.js";
+import { parseDateOnly, addDaysUTC, todayIST, getDayStatus } from "../utils/dateUtils.js";
 
 
 
@@ -223,43 +242,29 @@ export const registerUser = async (req, res) => {
       return res.status(400).json({ message: "Mobile number is required" });
     }
 
-    const emailStr = email.trim();
-    const mobileStr = String(mobile_number).trim();
-
-    if (emailStr.toLowerCase() === mobileStr.toLowerCase()) {
-      return res.status(400).json({ message: "Mobile number and email cannot be the same" });
+    const emailStr = normalizeEmail(email);
+    if (!isValidEmail(emailStr)) {
+      return res.status(400).json({ message: "Invalid email format. Enter a valid email address, e.g. name@example.com" });
+    }
+    const mobileStr = normalizeMobile(mobile_number);
+    if (!mobileStr) {
+      return res.status(400).json({ message: "Mobile number must be exactly 10 digits" });
+    }
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      return res.status(400).json({ message: passwordError });
     }
 
-    // OTP verification check
-    const verifiedRecord = await OtpVerification.findOne({
-      where: {
-        email: emailStr,
-        mobile_number: mobileStr,
-        is_email_verified: true,
-        is_mobile_verified: true,
-        [db.Sequelize.Op.or]: [
-          { modified_on: { [db.Sequelize.Op.gte]: new Date(Date.now() - 30 * 60 * 1000) } },
-          { updatedAt: { [db.Sequelize.Op.gte]: new Date(Date.now() - 30 * 60 * 1000) } }
-        ]
-      }
-    });
-    if (!verifiedRecord) {
-      return res.status(400).json({ message: "Email or mobile number is not verified. Please verify using OTP first." });
+    // The role is chosen by the (admin) caller; it must be a real role. It used to be written to a column that does
+    // not exist (role_privilage_id), so every user created here ended up with no role at all.
+    const roleId = Number(role_privilage_id ?? req.body.role_id);
+    const role = Number.isInteger(roleId) ? await db.MasterRole.findByPk(roleId) : null;
+    if (!role) {
+      return res.status(400).json({ message: "A valid role is required" });
     }
 
-    const existingUserByEmail = await User.findOne({ where: { email: emailStr } });
-    if (existingUserByEmail) {
-      return res.status(400).json({
-        message: "User already exists with this email",
-      });
-    }
-
-    const existingUserByMobile = await User.findOne({ where: { mobile_number: mobileStr } });
-    if (existingUserByMobile) {
-      return res.status(400).json({
-        message: "User already exists with this mobile number",
-      });
-    }
+    // What was really verified by OTP (not required for accounts an admin creates, but never claimed falsely)
+    const verified = await findVerifiedChannels({ OtpVerification }, { email: emailStr, mobile: mobileStr });
 
     // -----------------------------
     // 5. Hash Password
@@ -270,6 +275,10 @@ export const registerUser = async (req, res) => {
     // 6. Transaction Starts
     // -----------------------------
     const user = await db.sequelize.transaction(async (t) => {
+      await lockIdentifiers(db.sequelize, t, [emailStr, mobileStr]);
+      const duplicate = await findDuplicate({ User }, { email: emailStr, mobile: mobileStr }, t);
+      if (duplicate) throw new ApiError(409, duplicate);
+
       // Create main User
       const newUser = await User.create(
         {
@@ -279,6 +288,8 @@ export const registerUser = async (req, res) => {
           mobile_number: mobileStr,
           is_superuser: false,
           user_type: 1,
+          isEmailVerify: verified.email,
+          isMobileVerify: verified.mobile,
           created_by: creatorId || null
         },
         { transaction: t }
@@ -327,12 +338,13 @@ export const registerUser = async (req, res) => {
       await UserRole.create(
         {
           user_id: newUser.id,
-          role_privilage_id,
+          role_id: role.id,
           created_by: finalCreatorId
         },
         { transaction: t }
       );
 
+      await consumeVerification({ OtpVerification }, { email: verified.email ? emailStr : null, mobile: verified.mobile ? mobileStr : null }, t);
       return newUser;
     });
 
@@ -352,11 +364,7 @@ export const registerUser = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("🔥 REGISTRATION ERROR:", error);
-    return res.status(500).json({
-      message: "Registration failed",
-      error: error.message,
-    });
+    return respondWithError(req, res, error, "registerUser");
   }
 };
 
@@ -366,25 +374,20 @@ export const registerUser = async (req, res) => {
 
 
 export const loginUser = async (req, res) => {
-  const { email, mobile_number, identifier, password } = req.body;
-
   try {
-    const inputIdentifier = (email || mobile_number || identifier || "").trim();
-    if (!inputIdentifier || !password) {
-      return res.status(400).json({ success: false, message: "Email/Mobile and password are required" });
-    }
+    const { identifier, password } = parseOrThrow(loginSchema, req.body);
 
-    // 1. Find user by email or mobile_number
+    // Mobile numbers are stored as 10 digits since registration normalises them, older rows as typed
+    // ("+919876543210", "09876543210"): look for every spelling, so "+91 98765 43210" signs in too.
+    const mobile = normalizeMobile(identifier);
     const user = await User.findOne({
       where: {
         [db.Sequelize.Op.or]: [
-          db.Sequelize.where(
-            db.Sequelize.fn('LOWER', db.Sequelize.col('email')),
-            inputIdentifier.toLowerCase()
-          ),
-          { mobile_number: inputIdentifier }
-        ]
-      }
+          db.Sequelize.where(db.Sequelize.fn('LOWER', db.Sequelize.col('email')), identifier.toLowerCase()),
+          { mobile_number: mobile ? [mobile, `0${mobile}`, `91${mobile}`, `+91${mobile}`] : identifier },
+        ],
+      },
+      order: [["id", "ASC"]],
     });
 
     if (!user) {
@@ -395,50 +398,32 @@ export const loginUser = async (req, res) => {
       return res.status(400).json({ success: false, message: "Password not set for this account. Please reset password or activate account." });
     }
 
-    // 2. Compare passwords using bcrypt
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ success: false, message: "Invalid password" });
     }
 
-    // 3. Generate Access Token
-    const accessToken = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "3d" }
-    );
+    // Checked after the password, so the account's state is only revealed to its owner
+    if (user.is_active === false) {
+      return res.status(403).json({ success: false, message: "This account has been deactivated. Please contact support." });
+    }
 
-    // 4. Generate Refresh Token (stateless, not stored in DB)
-    const refreshToken = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_REFRESH_SECRET,
-      { expiresIn: "7d" }
-    );
+    const { accessToken, refreshToken } = await issueSessionTokens(user);
 
-    // Store refresh token in user table
-    await user.update({ refresh_token: refreshToken });
-
-    // 5. Send tokens to client
-    res.json({
+    return res.json({
       success: true,
       message: "Login successful",
       token: accessToken,
-      refreshToken: refreshToken,
+      refreshToken,
       user: {
         id: user.id,
         email: user.email,
         username: user.username,
-        user_type: user.user_type
+        user_type: user.user_type,
       },
     });
-
   } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Login failed",
-      error: error.message,
-    });
+    return respondWithError(req, res, error, "loginUser");
   }
 };
 
@@ -446,239 +431,149 @@ export const loginUser = async (req, res) => {
 
 
 
-// export const updateUserProfile = async (req, res) => {
-//   const t = await db.sequelize.transaction();
-//   try {
-//     const { userId } = req.params; // user id from URL
-//     const {
-//       password,
-//       username,
-//       mobile_number,
-//       state,
-//       district,
-//       block,
-//       village,
-//       address1,
-//       address2,
-//       pincodde,
-//       first_name,
-//       last_name,
-//       whatsapp_number,
-//       user_image_original_filename,
-//       user_image_new_filename,
-//       user_image_url,
-//       aadhar_number,
-//       pan_card_number,
-//       role_privilage_id,
-//     } = req.body;
-
-//     // Fetch user first
-//     const user = await User.findByPk(userId, { transaction: t });
-//     if (!user) {
-//       await t.rollback();
-//       return res.status(404).json({ message: "User not found" });
-//     }
-
-//     // Update User (email cannot be changed!)
-//     if (password) {
-//       user.password = await bcrypt.hash(password, 10);
-//     }
-//     if (username) user.username = username;
-//     if (mobile_number) user.mobile_number = mobile_number;
-//     user.modified_by = userId
-//     user.modified_on = new Date().toISOString();
-
-//     await user.save({ transaction: t });
-
-//     // Update Address
-//     const userAddress = await UserAddress.findOne({ where: { user_id: userId } });
-//     if (userAddress) {
-//       await userAddress.update(
-//         { state, district, block, village, address1, address2, pincodde },
-//         { transaction: t }
-//       );
-//     }
-
-//     // Update Profile
-//     const userProfile = await UserProfile.findOne({ where: { user_id: userId } });
-//     if (userProfile) {
-//       await userProfile.update(
-//         {
-//           first_name,
-//           last_name,
-//           whatsapp_number,
-//           user_image_original_filename,
-//           user_image_new_filename,
-//           user_image_url,
-//           aadhar_number,
-//           pan_card_number,
-//         },
-//         { transaction: t }
-//       );
-//     }
-
-//     // Update Role
-//     const userRole = await UserRole.findOne({ where: { user_id: userId } });
-//     if (userRole && role_privilage_id) {
-//       await userRole.update({ role_privilage_id }, { transaction: t });
-//     }
-
-//     await t.commit();
-
-//     return res.status(200).json({ message: "Profile updated successfully" });
-//   } catch (error) {
-//     await t.rollback();
-//     console.error(error);
-//     return res.status(500).json({ message: "Profile update failed", error: error.message });
-//   }
-// };
-
+// // Admin-only (see user.routes.js). It used to be callable by anyone: a request naming any user_id could set that
+// user's password and role, i.e. take over any account, including an administrator's.
 export const updateUserProfile = async (req, res) => {
   try {
     const {
-      user_id, // required
-      email,
-      password,
-      username,
-      mobile_number,
-      addresses, // optional array
-      first_name,
-      last_name,
-      whatsapp_number,
-      user_image_original_filename,
-      user_image_new_filename,
-      user_image_url,
-      aadhar_number,
-      pan_card_number,
+      user_id,
+      email, password, username, mobile_number,
+      addresses,
+      first_name, last_name, whatsapp_number,
+      user_image_original_filename, user_image_new_filename, user_image_url,
+      aadhar_number, pan_card_number,
       role_id,
     } = req.body;
 
     if (!user_id) {
       return res.status(400).json({ message: "User ID is required" });
     }
-
     const user = await User.findByPk(user_id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Hash password only if provided
-    let hashedPassword = user.password;
+    // Only the fields that were sent are changed (an absent field used to be written as NULL)
+    const userChanges = {};
+    if (email !== undefined) {
+      const emailStr = normalizeEmail(email);
+      if (!isValidEmail(emailStr)) return res.status(400).json({ message: "Invalid email format" });
+      userChanges.email = emailStr;
+    }
+    if (mobile_number !== undefined) {
+      const mobileStr = normalizeMobile(mobile_number);
+      if (!mobileStr) return res.status(400).json({ message: "Mobile number must be exactly 10 digits" });
+      userChanges.mobile_number = mobileStr;
+    }
+    if (username !== undefined) userChanges.username = String(username).trim().slice(0, 50);
     if (password) {
-      hashedPassword = await bcrypt.hash(password, 10);
+      const passwordError = validatePassword(password);
+      if (passwordError) return res.status(400).json({ message: passwordError });
+      userChanges.password = await bcrypt.hash(password, 10);
     }
 
+    let role = null;
+    if (role_id !== undefined && role_id !== null && role_id !== "") {
+      role = await db.MasterRole.findByPk(Number(role_id));
+      if (!role) return res.status(400).json({ message: "role_id is not a valid role" });
+    }
+
+    const cleanAddresses = Array.isArray(addresses) && addresses.length > 0
+      ? await buildAddresses(db, addresses)
+      : null;
+
     await db.sequelize.transaction(async (t) => {
-      // 1. Update User basic info
-      await user.update(
-        {
-          email,
-          password: hashedPassword,
-          username,
-          mobile_number,
-        },
-        { transaction: t }
-      );
+      // Changing e-mail/mobile must not collide with another account (checked under the same lock as sign-up)
+      if (userChanges.email || userChanges.mobile_number) {
+        await lockIdentifiers(db.sequelize, t, [userChanges.email, userChanges.mobile_number].filter(Boolean));
+        const others = [
+          ...(userChanges.email ? [db.Sequelize.where(db.Sequelize.fn("lower", db.Sequelize.col("email")), userChanges.email)] : []),
+          ...(userChanges.mobile_number ? [{ mobile_number: userChanges.mobile_number }] : []),
+        ];
+        const clash = await User.findOne({
+          where: { id: { [db.Sequelize.Op.ne]: user.id }, [db.Sequelize.Op.or]: others },
+          transaction: t,
+        });
+        if (clash) throw new ApiError(409, "Another account already uses this email or mobile number");
+      }
 
-      // 2. Update addresses only if provided
-      if (Array.isArray(addresses) && addresses.length > 0) {
+      if (Object.keys(userChanges).length > 0) {
+        await user.update({ ...userChanges, modified_on: new Date(), modified_by: req.auth?.id ?? null }, { transaction: t });
+      }
+
+      if (cleanAddresses) {
         await UserAddress.destroy({ where: { user_id }, transaction: t });
-
-        const newAddresses = addresses.map((address) => ({
-          user_id,
-          lane_1: address.lane_1,
-          lane_2: address.lane_2,
-          state: address.state,
-          district: address.district,
-          block: address.block,
-          village: address.village,
-          pincode: address.pincode,
-        }));
-
-        await UserAddress.bulkCreate(newAddresses, { transaction: t });
-      }
-
-      // 3. Update or Create User Profile
-      const existingProfile = await UserProfile.findOne({
-        where: { user_id },
-        transaction: t,
-      });
-
-      if (existingProfile) {
-        await existingProfile.update(
-          {
-            first_name,
-            last_name,
-            whatsapp_number,
-            user_image_original_filename,
-            user_image_new_filename,
-            user_image_url,
-            aadhar_number,
-            pan_card_number,
-          },
-          { transaction: t }
-        );
-      } else {
-        await UserProfile.create(
-          {
-            user_id,
-            first_name,
-            last_name,
-            whatsapp_number,
-            user_image_original_filename,
-            user_image_new_filename,
-            user_image_url,
-            aadhar_number,
-            pan_card_number,
-          },
+        await UserAddress.bulkCreate(
+          cleanAddresses.map((a) => ({ ...a, user_id, created_by: req.auth?.id ?? null })),
           { transaction: t }
         );
       }
 
-      // 4. Update or Create Role
-      const existingRole = await UserRole.findOne({
-        where: { user_id },
-        transaction: t,
-      });
+      const profileChanges = Object.fromEntries(Object.entries({
+        first_name, last_name, whatsapp_number,
+        user_image_original_filename, user_image_new_filename, user_image_url,
+        aadhar_number, pan_card_number,
+      }).filter(([, v]) => v !== undefined));
+      if (Object.keys(profileChanges).length > 0) {
+        const existingProfile = await UserProfile.findOne({ where: { user_id }, transaction: t });
+        if (existingProfile) {
+          await existingProfile.update(profileChanges, { transaction: t });
+        } else {
+          if (!profileChanges.first_name) throw new ApiError(400, "first_name is required to create a profile");
+          await UserProfile.create({ user_id, ...profileChanges }, { transaction: t });
+        }
+      }
 
-      if (existingRole) {
-        await existingRole.update({ role_id }, { transaction: t });
-      } else {
-        await UserRole.create({ user_id, role_id }, { transaction: t });
+      if (role) {
+        const existingRole = await UserRole.findOne({ where: { user_id }, transaction: t });
+        if (existingRole) await existingRole.update({ role_id: role.id }, { transaction: t });
+        else await UserRole.create({ user_id, role_id: role.id }, { transaction: t });
       }
     });
 
-    return res.status(200).json({
-      message: "User updated successfully",
-      user_id,
-    });
+    return res.status(200).json({ message: "User updated successfully", user_id });
   } catch (error) {
-    console.error("Update Error:", error);
-    return res.status(500).json({
-      message: "User update failed",
-      error: error.message,
-    });
+    return respondWithError(req, res, error, "updateUserProfile");
   }
 };
 
-
+// Accounts are deactivated, never hard-deleted: orders, daily logs and timelines refer to the user's id, and
+// removing the row left them pointing at nobody (and left the profile, roles and addresses orphaned).
 export const deleteUser = async (req, res) => {
-  const { id } = req.params;
-
   try {
-    // 1. Find user
-    const user = await User.findByPk(id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    const id = Number(req.body?.id ?? req.body?.user_id ?? req.params?.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ success: false, message: "A valid user id is required" });
+    }
+    if (id === req.auth?.id) {
+      return res.status(409).json({ success: false, message: "You cannot deactivate your own account" });
     }
 
-    // 2. Delete user
-    await user.destroy();
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
 
-    res.json({ message: "User deleted successfully" });
+    // Work in progress must be handed over first
+    const openStatuses = [OrderStatusEnum.ORDER_CANCELLED, OrderStatusEnum.ORDER_REJECTED, OrderStatusEnum.ORDER_COMPLETED, OrderStatusEnum.PAYMENT_SUCCESSFUL];
+    const openOrders = await SprayingOrder.count({
+      where: { user_id: id, order_status: { [db.Sequelize.Op.notIn]: openStatuses } },
+    });
+    const upcomingDays = await SprayingDailyLogs.count({
+      where: { pilot_user_id: id, is_active: true, working_date: { [db.Sequelize.Op.gte]: parseDateOnly(todayIST()) } },
+    });
+    if (openOrders > 0 || upcomingDays > 0) {
+      return res.status(409).json({
+        success: false,
+        code: "USER_HAS_OPEN_WORK",
+        message: `This user still has ${openOrders} open order(s) and ${upcomingDays} upcoming working day(s). Cancel or reassign them first.`,
+      });
+    }
+
+    await user.update({ is_active: false, refresh_token: null, modified_on: new Date(), modified_by: req.auth?.id ?? null });
+    return res.json({ success: true, message: "User deactivated successfully" });
   } catch (error) {
-    console.error("Delete user error:", error);
-    res.status(500).json({ message: "Failed to delete user", error: error.message });
+    return respondWithError(req, res, error, "deleteUser");
   }
 };
 
@@ -1235,40 +1130,28 @@ export const refreshAccessToken = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?.userId;
 
-    // 1. Find user in DB
     const user = await User.findByPk(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // 2. Generate new access token
-    const newAccessToken = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "3d" }
-    );
+    // The signature alone is not enough: the token must be the one last issued to this user (an old or stolen
+    // refresh token used to keep working for its full 7 days, even after a password change), and the account must
+    // still be active.
+    if (user.is_active === false || !refreshTokenMatches(user, req.refreshToken)) {
+      return res.status(401).json({ success: false, code: "REFRESH_TOKEN_EXPIRED", message: "Invalid or expired refresh token." });
+    }
 
-    // 3. Generate new refresh token
-    const newRefreshToken = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_REFRESH_SECRET,
-      { expiresIn: "7d" }
-    );
+    const { accessToken, refreshToken } = await issueSessionTokens(user);
 
-    // 4. Update refresh token in User table
-    await user.update({ refresh_token: newRefreshToken });
-
-    // 5. Return response
     return res.json({
       success: true,
       message: "Access token and refresh token renewed successfully",
-      token: newAccessToken,
-      refreshToken: newRefreshToken,
+      token: accessToken,
+      refreshToken,
     });
-
   } catch (error) {
-    console.error("Refresh token controller error:", error);
-    return res.status(500).json({ success: false, message: "Failed to renew tokens", error: error.message });
+    return respondWithError(req, res, error, "refreshAccessToken");
   }
 };
 
@@ -1315,427 +1198,182 @@ export const getMe = async (req, res) => {
 };
 
 
-export const getDroneByIds = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Basic validation
-    if (!id) {
-      return res.status(400).json({
-        success: false,
-        message: "Drone ID is required"
-      });
-    }
-
-    // Fetch basic drone details
-    const drone = await Drone1.findByPk(id, {
-      attributes: { exclude: ["createdAt", "updatedAt"] }
-    });
-
-    if (!drone) {
-      return res.status(404).json({
-        success: false,
-        message: "Drone not found"
-      });
-    }
-
-    // Fetch and enrich with arms data
-    const droneArms = await DroneArms.findAll({
-      where: { drone_id: id },
-      attributes: ["arms_id", "arms_qty"],
-      raw: true
-    });
-
-    const arms = await Promise.all(droneArms.map(async (arm) => {
-      const masterArm = await MasterArms.findOne({
-        where: { id: arm.arms_id },
-        attributes: ["id", "name"],
-        raw: true
-      });
-
-      return {
-        master_arm_id: arm.arms_id,
-        qty: arm.arms_qty,
-        master_arm_name: masterArm ? masterArm.name : null
-      };
-    }));
-
-    // Fetch and enrich with battery data
-    const droneBatteries = await DroneBattery.findAll({
-      where: { drone_id: id },
-      attributes: ["battery_id", "battery_qty"],
-      raw: true
-    });
-
-    const batteries = await Promise.all(droneBatteries.map(async (battery) => {
-      const masterBattery = await MasterBattery.findOne({
-        where: { id: battery.battery_id },
-        attributes: ["id", "name", "brand_name", "capacity", "cell_number"],
-        raw: true
-      });
-
-      return {
-        master_battery_id: battery.battery_id,
-        qty: battery.battery_qty,
-        master_battery_name: masterBattery ? masterBattery.name : null,
-        brand_name: masterBattery ? masterBattery.brand_name : null,
-        capacity: masterBattery ? masterBattery.capacity : null,
-        cell_number: masterBattery ? masterBattery.cell_number : null
-      };
-    }));
-
-    // Fetch and enrich with charger data
-    const droneChargers = await DroneCharger.findAll({
-      where: { drone_id: id },
-      attributes: ["charger_id", "is_charger_cable", "ischarger_pcable"],
-      raw: true
-    });
-
-    const chargers = await Promise.all(droneChargers.map(async (charger) => {
-      const masterCharger = await MasterCharger.findOne({
-        where: { id: charger.charger_id },
-        attributes: ["id", "name", "brand_name", "desc"],
-        raw: true
-      });
-
-      return {
-        master_charger_id: charger.charger_id,
-        master_charger_name: masterCharger ? masterCharger.name : null,
-        brand_name: masterCharger ? masterCharger.brand_name : null,
-        description: masterCharger ? masterCharger.desc : null,
-        is_charger_cable: charger.is_charger_cable,
-        ischarger_pcable: charger.ischarger_pcable
-      };
-    }));
-
-    // Fetch and enrich with controller data
-    const droneControllers = await DroneController.findAll({
-      where: { drone_id: id },
-      attributes: ["id", "transmitter_id", "receiver_id"],
-      raw: true
-    });
-
-    const controllers = await Promise.all(droneControllers.map(async (controller) => {
-      const transmitter = await MasterTransmitter.findOne({
-        where: { id: controller.transmitter_id },
-        attributes: ["id", "name", "brand_name", "transmitter_type", "desc"],
-        raw: true
-      });
-
-      const receiver = await MasterReceiver.findOne({
-        where: { id: controller.receiver_id },
-        attributes: ["id", "name", "brand_name", "receiver_type", "desc"],
-        raw: true
-      });
-
-      return {
-        controller_id: controller.id,
-        transmitter_id: controller.transmitter_id,
-        transmitter_name: transmitter ? transmitter.name : null,
-        transmitter_brand_name: transmitter ? transmitter.brand_name : null,
-        transmitter_type: transmitter ? transmitter.transmitter_type : null,
-        transmitter_description: transmitter ? transmitter.desc : null,
-        receiver_id: controller.receiver_id,
-        receiver_name: receiver ? receiver.name : null,
-        receiver_brand_name: receiver ? receiver.brand_name : null,
-        receiver_type: receiver ? receiver.receiver_type : null,
-        receiver_description: receiver ? receiver.desc : null
-      };
-    }));
-
-    // Fetch and enrich with landing gear data
-    const droneLandingGears = await DroneLandingGear.findAll({
-      where: { drone_id: id },
-      attributes: ["landing_gear_id"],
-      raw: true
-    });
-
-    const landing_gears = await Promise.all(droneLandingGears.map(async (gear) => {
-      const masterGear = await MasterLandingGear.findOne({
-        where: { id: gear.landing_gear_id },
-        attributes: ["id", "name", "brand_name", "desc"],
-        raw: true
-      });
-
-      return {
-        master_landing_gear_id: gear.landing_gear_id,
-        master_landing_gear_name: masterGear ? masterGear.name : null,
-        brand_name: masterGear ? masterGear.brand_name : null,
-        description: masterGear ? masterGear.desc : null
-      };
-    }));
-
-    // Fetch and enrich with motor data
-    const droneMotors = await DroneMotor.findAll({
-      where: { drone_id: id },
-      attributes: ["motor_id", "motor_qty"],
-      raw: true
-    });
-
-    const motors = await Promise.all(droneMotors.map(async (motor) => {
-      const masterMotor = await MasterMotor.findOne({
-        where: { id: motor.motor_id },
-        attributes: ["id", "name", "brand_name", "desc"],
-        raw: true
-      });
-
-      return {
-        master_motor_id: motor.motor_id,
-        motor_qty: motor.motor_qty,
-        master_motor_name: masterMotor ? masterMotor.name : null,
-        brand_name: masterMotor ? masterMotor.brand_name : null,
-        description: masterMotor ? masterMotor.desc : null
-      };
-    }));
-
-    // Combine all data
-    const enrichedDrone = {
-      ...drone.dataValues,
-      arms,
-      batteries,
-      chargers,
-      controllers,
-      landing_gears,
-      motors
-    };
-
-    return res.status(200).json({
-      success: true,
-      data: enrichedDrone
-    });
-
-  } catch (error) {
-    console.error("Error fetching drone:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
-  }
-};
-
-
-// export const updateOrder = async (req, res) => {
-//   try {
-//     const {
-//       booking_id,       // Required
-//       order_status,
-//       is_paid,
-//       transcation_id,
-//       start_date,
-//       end_date,
-//       num_of_days,
-//       crop_type_id,
-//       land_in_acers,
-//       price,
-//       tax,
-//       total_price,
-//       cupon_id,
-//       discount,
-//       user_id,
-//       address           // Optional object
-//     } = req.body;
-
-//     if (!booking_id) {
-//       return res.status(400).json({ message: "booking_id is required" });
-//     }
-
-//     // Find order
-//     const order = await SprayingOrder.findOne({ where: { booking_id } });
-//     if (!order) return res.status(404).json({ message: "Order not found" });
-
-//     // Update order
-//     await order.update({
-//       start_date: start_date || order.start_date,
-//       end_date: end_date || order.end_date,
-//       num_of_days: num_of_days || order.num_of_days,
-//       crop_type_id: crop_type_id || order.crop_type_id,
-//       land_in_acers: land_in_acers || order.land_in_acers,
-//       price: price || order.price,
-//       tax: tax || order.tax,
-//       total_price: total_price || order.total_price,
-//       cupon_id: cupon_id || order.cupon_id,
-//       discount: discount || order.discount,
-//       user_id: user_id || order.user_id,
-//       order_status: order_status || order.order_status,
-//       is_paid: is_paid !== undefined ? is_paid : order.is_paid,
-//       transcation_id: transcation_id || order.transcation_id,
-//     });
-
-//     // Update or create address
-//     if (address) {
-//       const existingAddress = await SprayingOrderAddress.findOne({ where: { order_id: booking_id } });
-
-//       if (existingAddress) {
-//         // Update existing address
-//         await existingAddress.update({
-//           state: address.state || existingAddress.state,
-//           district: address.district || existingAddress.district,
-//           block: address.block || existingAddress.block,
-//           village: address.village || existingAddress.village,
-//           address1: address.address1 || existingAddress.address1,
-//           address2: address.address2 || existingAddress.address2,
-//         });
-//       } else {
-//         // Create new address
-//         await SprayingOrderAddress.create({
-//           order_id: booking_id,
-//           state: address.state,
-//           district: address.district,
-//           block: address.block,
-//           village: address.village,
-//           address1: address.address1,
-//           address2: address.address2,
-//         });
-//       }
-//     }
-
-//     res.status(200).json({ message: "Order and address updated successfully" });
-
-//   } catch (error) {
-//     console.error("Error updating order:", error);
-//     res.status(500).json({ error: error.message });
-//   }
-// };
+// getDroneByIds lives in models/pr.js (the copy that was here was unused and referenced undefined models).
 
 
 
+// GST added to the crop price. The Farmer app shows the farmer price + 5% and the order must be stored at that
+// same amount, so the rate lives here on the server instead of being sent by the client.
+const ORDER_TAX_RATE = Number(process.env.ORDER_TAX_RATE ?? 0.05);
+const roundMoney = (value) => Math.round(value * 100) / 100;
+
+// Requires a signed-in user (see orderRoutes.js). A farmer can only book for themselves; an admin books on a
+// farmer's behalf. The price is calculated here: the client's price/tax/discount/total are only honoured for admins.
 export const createOrder = async (req, res) => {
   try {
-    const {
-      start_date,
-      end_date,
-      num_of_days,
-      crop_type_id,
-      land_in_acers,
-      price,
-      tax,
-      total_price,
-      cupon_id,
-      discount,
-      user_id,
-      address,
-      farmer_details // new field from frontend
-    } = req.body;
+    const caller = req.auth;
+    const body = parseOrThrow(createOrderSchema, req.body);
+    const { start_date: startDateObj, crop_type_id, land_in_acers: landAcres, num_of_days, address, farmer_details } = body;
 
-    let final_user_id = user_id;
-
-    // Auto-create or find user if user_id is missing but farmer_details is provided
-    if (!final_user_id && farmer_details && farmer_details.mobile) {
-      let existingUser = await db.User.findOne({ where: { mobile_number: farmer_details.mobile } });
-      if (!existingUser) {
-        const hashedPassword = await bcrypt.hash("12345678", 10);
-        existingUser = await db.User.create({
-          username: farmer_details.name || "Farmer",
-          mobile_number: farmer_details.mobile,
-          email: farmer_details.email || null,
-          user_type: 1, // Farmer
-          password: hashedPassword
-        });
-        await db.UserProfile.create({
-          user_id: existingUser.id,
-          first_name: farmer_details.name || "Farmer"
-        });
+    // ── Who is the order for? ─────────────────────────────────────────
+    let finalUserId;
+    if (!caller.isAdmin) {
+      finalUserId = caller.id;              // user_id / farmer_details in the request are ignored on purpose
+    } else if (body.user_id) {
+      finalUserId = Number(body.user_id);
+      if (!Number.isInteger(finalUserId) || !(await User.findByPk(finalUserId, { attributes: ["id"] }))) {
+        return res.status(400).json({ error: "user_id does not match an existing user" });
       }
-      final_user_id = existingUser.id;
-    }
-
-    if (!start_date || !crop_type_id || !final_user_id) {
+    } else if (farmer_details?.mobile) {
+      finalUserId = null;                   // resolved inside the transaction below
+    } else {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const landAcres = land_in_acers || 0;
+    // start_date (a calendar date stored as UTC midnight, today or later in India), crop_type_id, land_in_acers
+    // (0 < acres <= 1000), num_of_days (1-60) and the address shape were checked by createOrderSchema.
+    const crop = await db.MasterCrop.findByPk(crop_type_id);
+    if (!crop || crop.is_active === false) {
+      return res.status(400).json({ error: "Invalid crop_type_id" });
+    }
 
-    // 🔥 IST TIME FIX
-    const nowISTString = new Date().toLocaleString("en-US", {
-      timeZone: "Asia/Kolkata",
-    });
-    const createdOnIST = new Date(nowISTString);
+    // The state -> district -> block chain must exist and belong together
+    const problem = await checkLocationChain(db, address);
+    if (problem) return res.status(400).json({ error: `address: ${problem}` });
 
-    // Calculate working days based on MasterWorkingDays logic
-    let calculatedNumOfDays = parseInt(num_of_days) || 1;
-    let calculatedEndDate = end_date || start_date;
+    // Calculate working days based on MasterWorkingDays logic.
+    // Fallback (no matching rule, no num_of_days sent): default drone capacity of 5 acres/day.
+    let calculatedNumOfDays = num_of_days || Math.max(1, Math.ceil(landAcres / 5));
 
     try {
       const workingDayRecord = await db.MasterWorkingDays.findOne({
         where: {
           is_active: true,
-          min_acre: { [db.Op.lte]: parseFloat(landAcres) },
-          max_acre: { [db.Op.gte]: parseFloat(landAcres) },
+          min_acre: { [db.Op.lte]: landAcres },
+          max_acre: { [db.Op.gte]: landAcres },
         }
       });
 
       if (workingDayRecord && workingDayRecord.working_days) {
         calculatedNumOfDays = workingDayRecord.working_days;
-
-        // Compute end_date by adding (working_days - 1) to start_date
-        const stDate = new Date(start_date);
-        stDate.setDate(stDate.getDate() + (calculatedNumOfDays - 1));
-        calculatedEndDate = stDate.toISOString().slice(0, 10);
       }
     } catch (err) {
-      console.error("Error calculating working days:", err);
+      logger.error(`Error calculating working days: ${err.message}`);
     }
 
-    // Generate unique booking_id
+    // end_date = start_date + (working_days - 1), pure UTC calendar arithmetic
+    const calculatedEndDate = addDaysUTC(startDateObj, calculatedNumOfDays - 1);
+
+    // ── Price: calculated by the server ────────────────────────────────
+    const basePrice = roundMoney(parseFloat(crop.price_per_acre || 0) * landAcres);
+    let orderPrice = basePrice;
+    let orderTax = roundMoney(basePrice * ORDER_TAX_RATE);
+    let orderDiscount = 0;
+    if (caller.isAdmin) {
+      const money = (value, fallback, label) => {
+        if (value === undefined || value === null || value === "") return fallback;
+        const n = Number(value);
+        if (!Number.isFinite(n) || n < 0) throw new ApiError(400, `${label} must be a number of 0 or more`);
+        return roundMoney(n);
+      };
+      orderPrice = money(body.price, basePrice, "price");
+      orderTax = money(body.tax, roundMoney(orderPrice * ORDER_TAX_RATE), "tax");
+      orderDiscount = money(body.discount, 0, "discount");
+      if (orderDiscount > orderPrice + orderTax) throw new ApiError(400, "discount cannot be more than the price plus tax");
+    }
+    const orderTotal = roundMoney(orderPrice + orderTax - orderDiscount);
+
     const bookingId = uuidv4();
+    const autoVerified = !caller.isAdmin;   // the farmer's own login already proves who is booking
+    const bookingOtp = autoVerified ? null : generateOtp();
 
-    const bookingOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    // ── Order, timeline and address are saved together or not at all ─────
+    await db.sequelize.transaction(async (t) => {
+      let userId = finalUserId;
+      if (!userId) {
+        // Admin booking for a farmer who has no account yet: create a placeholder account that cannot be signed
+        // into until the farmer sets a password (it used to get the fixed password "12345678").
+        const mobile = normalizeMobile(farmer_details.mobile);
+        if (!mobile) throw new ApiError(400, "farmer_details.mobile must be a 10 digit mobile number");
+        const email = farmer_details.email ? normalizeEmail(farmer_details.email) : null;
+        if (email && !isValidEmail(email)) throw new ApiError(400, "farmer_details.email is not a valid email address");
 
-    // Create order
-    const order = await SprayingOrder.create({
-      booking_id: bookingId,
-      start_date,
-      end_date: calculatedEndDate,
-      num_of_days: calculatedNumOfDays,
-      crop_type_id,
-      land_in_acers: landAcres,
-      price,
-      tax,
-      total_price,
-      cupon_id: 13,
-      discount,
-      user_id: final_user_id,
-      order_status: OrderStatusEnum.ORDER_PLACED,
-      is_paid: false,
-      transcation_id: null,
-      booking_otp: bookingOtp,
+        await lockIdentifiers(db.sequelize, t, [mobile, email].filter(Boolean));
+        let farmer = await User.findOne({ where: { mobile_number: mobile }, transaction: t });
+        if (!farmer) {
+          farmer = await User.create({
+            username: String(farmer_details.name || "Farmer").slice(0, 50),
+            mobile_number: mobile,
+            email,
+            user_type: 3,
+            password: await bcrypt.hash(randomInt(0, 2 ** 31).toString(36) + uuidv4(), 10),
+            created_by: caller.id,
+          }, { transaction: t });
+          await db.UserProfile.create({ user_id: farmer.id, first_name: String(farmer_details.name || "Farmer").slice(0, 60), created_by: caller.id }, { transaction: t });
+        }
+        userId = farmer.id;
+      }
 
-      // 🔥 IST timestamp
-      created_on: createdOnIST,
+      await SprayingOrder.create({
+        booking_id: bookingId,
+        start_date: startDateObj,
+        end_date: calculatedEndDate,
+        num_of_days: calculatedNumOfDays,
+        crop_type_id,
+        land_in_acers: landAcres,
+        price: orderPrice,
+        tax: orderTax,
+        total_price: orderTotal,
+        cupon_id: null,                       // coupons are not implemented; it used to be filled with a made-up id (13)
+        discount: orderDiscount,
+        user_id: userId,
+        order_status: OrderStatusEnum.ORDER_PLACED,
+        is_paid: false,
+        transcation_id: null,
+        booking_otp: bookingOtp,
+        created_on: new Date(),
+        created_by: caller.isAdmin ? caller.id : userId,
+      }, { transaction: t });
 
-      // 🔥 IMPORTANT FIX
-      created_by: final_user_id,
-    });
+      await db.SprayingOrderTimeline.create({
+        booking_id: bookingId,
+        order_status: OrderStatusEnum.ORDER_PLACED,
+        remarks: caller.isAdmin ? 'Order placed by admin' : 'Order Placed',
+        created_by: caller.id,
+      }, { transaction: t });
 
-    await db.SprayingOrderTimeline.create({
-      booking_id: bookingId,
-      order_status: OrderStatusEnum.ORDER_PLACED,
-      remarks: 'Order Placed',
-      created_by: final_user_id
-    });
+      if (autoVerified) {
+        await updateOrderStatus(bookingId, OrderStatusEnum.WAITING_FOR_CONFIRMATION, "Order confirmed by farmer", userId, t);
+      }
 
-    // Create order address
-    if (address) {
       await SprayingOrderAddress.create({
         order_id: bookingId,
         state: address.state,
         district: address.district,
         block: address.block,
         village: address.village,
-        address1: address.address1,
-        address2: address.address2,
-      });
-    }
+        lane1: address.lane1 || address.address1,
+        lane2: address.lane2 || address.address2,
+        address1: address.address1 || address.lane1,
+        address2: address.address2 || address.lane2,
+        pincode: address.pincode,
+      }, { transaction: t });
+    });
 
     return res.status(201).json({
       message: "Order and address created successfully",
       booking_id: bookingId,
-      dev_otp: process.env.NODE_ENV !== 'production' ? bookingOtp : undefined
+      order_status: autoVerified ? OrderStatusEnum.WAITING_FOR_CONFIRMATION : OrderStatusEnum.ORDER_PLACED,
+      otp_required: !autoVerified,
+      price: orderPrice,
+      tax: orderTax,
+      discount: orderDiscount,
+      total_price: orderTotal,
+      dev_otp: !autoVerified && env.EXPOSE_DEV_OTPS ? bookingOtp : undefined,
     });
 
   } catch (error) {
-    console.error("CREATE ORDER ERROR:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "createOrder");
   }
 };
 
@@ -1753,18 +1391,14 @@ export const getUsersForBooking = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("GET USERS ERROR:", error);
-    return res.status(500).json({
-      error: error.message,
-    });
+    return respondWithError(req, res, error, "getUsersForBooking");
   }
 };
 
 
 export const getUserByEmail = async (req, res) => {
   try {
-
-    const { email } = req.query;
+    const email = normalizeEmail(req.query.email);
 
     if (!email) {
       return res.status(400).json({
@@ -1772,8 +1406,9 @@ export const getUserByEmail = async (req, res) => {
       });
     }
 
+    // case-insensitive, like login
     const user = await User.findOne({
-      where: { email },
+      where: db.Sequelize.where(db.Sequelize.fn("lower", db.Sequelize.col("email")), email),
       attributes: ["id", "email", "username", "mobile_number"]
     });
 
@@ -1817,37 +1452,35 @@ export const getUserByEmail = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("GET USER ERROR:", error);
-    return res.status(500).json({
-      error: error.message
-    });
+    return respondWithError(req, res, error, "getUserByEmail");
   }
 };
 
 export const addUserAddress = async (req, res) => {
   try {
     const { user_id } = req.params;
-    const { lane_1, state, district, block, village, pincode } = req.body;
+    if (!(await User.findByPk(user_id, { attributes: ["id"] }))) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
-    if (!user_id || !lane_1 || !state || !district || !block || !village || !pincode) {
-      return res.status(400).json({ message: "Missing required fields" });
+    // state -> district -> block must be a real, consistent chain and the pincode 6 digits (nothing is invented)
+    const [clean] = await buildAddresses(db, [{ ...req.body, is_primary: false }]);
+    if (!req.body.lane_1 && !req.body.lane1) {
+      return res.status(400).json({ message: "Address: lane_1 is required" });
     }
 
     const newAddress = await UserAddress.create({
       user_id,
-      lane_1,
-      state,
-      district,
-      block,
-      village,
-      pincode,
-      is_active: true
+      ...clean,
+      is_primary: false,
+      is_active: true,
+      created_by: req.auth?.id ?? null,
     });
 
     const [stateObj, districtObj, blockObj] = await Promise.all([
-      MasterState.findOne({ where: { id: state }, attributes: ["state_name"], raw: true }),
-      MasterDistrict.findOne({ where: { id: district }, attributes: ["district_name"], raw: true }),
-      MasterBlock.findOne({ where: { id: block }, attributes: ["block_name"], raw: true }),
+      MasterState.findOne({ where: { id: clean.state }, attributes: ["state_name"], raw: true }),
+      MasterDistrict.findOne({ where: { id: clean.district }, attributes: ["district_name"], raw: true }),
+      MasterBlock.findOne({ where: { id: clean.block }, attributes: ["block_name"], raw: true }),
     ]);
 
     return res.status(201).json({
@@ -1860,8 +1493,7 @@ export const addUserAddress = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("ADD USER ADDRESS ERROR:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "addUserAddress");
   }
 };
 
@@ -1878,18 +1510,32 @@ export const verifyOrderOTP = async (req, res) => {
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
+    // A booking can only be confirmed / re-sent by the farmer it belongs to, or by an admin
+    if (!req.auth?.isAdmin && order.user_id !== req.auth?.id) {
+      return res.status(403).json({ message: "This booking does not belong to you" });
+    }
 
-    if (order.booking_otp !== otp) {
+    // Already confirmed (e.g. a logged-in farmer's booking): nothing left to verify
+    if (!order.booking_otp && order.order_status !== OrderStatusEnum.ORDER_PLACED) {
+      return res.status(200).json({
+        message: "Order already confirmed",
+        booking_id,
+        order_status: order.order_status,
+      });
+    }
+
+    if (!order.booking_otp || order.booking_otp !== String(otp).trim()) {
       return res.status(400).json({ message: "Invalid OTP" });
     }
 
-    await updateOrderStatus(booking_id, OrderStatusEnum.WAITING_FOR_CONFIRMATION, "OTP Verified");
-    await order.update({ booking_otp: null });
+    await db.sequelize.transaction(async (t) => {
+      await updateOrderStatus(booking_id, OrderStatusEnum.WAITING_FOR_CONFIRMATION, "OTP Verified", req.auth?.id ?? null, t);
+      await order.update({ booking_otp: null }, { transaction: t });
+    });
 
     return res.status(200).json({ message: "OTP verified successfully, order created" });
   } catch (error) {
-    console.error("VERIFY ORDER OTP ERROR:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "verifyOrderOTP");
   }
 };
 
@@ -1906,152 +1552,193 @@ export const resendOrderOTP = async (req, res) => {
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
+    if (!req.auth?.isAdmin && order.user_id !== req.auth?.id) {
+      return res.status(403).json({ message: "This booking does not belong to you" });
+    }
+    // Only a booking that is still waiting for its OTP has anything to resend
+    if (order.order_status !== OrderStatusEnum.ORDER_PLACED) {
+      return res.status(409).json({ message: "This booking has already been confirmed" });
+    }
 
-    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const newOtp = generateOtp();
 
     await order.update({ booking_otp: newOtp });
 
-    // Normally send SMS here...
-
-    return res.status(200).json({ message: "OTP resent successfully" });
+    // No SMS gateway is connected yet (see services/sms.service.js): the code is only returned to developers.
+    return res.status(200).json({
+      message: "OTP resent successfully",
+      dev_otp: env.EXPOSE_DEV_OTPS ? newOtp : undefined,
+    });
   } catch (error) {
-    console.error("RESEND ORDER OTP ERROR:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "resendOrderOTP");
   }
 };
 
+// Admin list of orders with their addresses. Paged (default 200, max 1000): it used to load every order and run
+// one extra query per order.
 export const getOrders = async (req, res) => {
   try {
-    // Fetch all orders with their addresses
-    const orders = await SprayingOrder.findAll();
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
-    // For each order, fetch its address and combine
-    const result = await Promise.all(
-      orders.map(async (order) => {
-        const address = await SprayingOrderAddress.findOne({
-          where: { order_id: order.booking_id },
-        });
-        return {
-          ...order.dataValues,
-          address: address ? address.dataValues : null,
-        };
-      })
-    );
+    const orders = await SprayingOrder.findAll({ order: [["created_on", "DESC"]], limit, offset });
+    const addresses = orders.length
+      ? await SprayingOrderAddress.findAll({ where: { order_id: orders.map((o) => o.booking_id) } })
+      : [];
+    const addressByOrder = new Map(addresses.map((a) => [a.order_id, a.dataValues]));
 
-    res.status(200).json(result);
+    res.status(200).json(orders.map((order) => ({
+      ...order.dataValues,
+      address: addressByOrder.get(order.booking_id) || null,
+    })));
   } catch (error) {
-    console.error("Error fetching orders:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "getOrders");
   }
 };
 
+
+const VALID_ORDER_STATUSES = new Set(Object.values(OrderStatusEnum));
+const CLOSING_STATUSES = [OrderStatusEnum.ORDER_CANCELLED, OrderStatusEnum.ORDER_REJECTED];
+
+// Admin edit of an order. Only the fields that are sent change (0 is a valid value, e.g. removing a discount),
+// the total is always price + tax - discount, the status must be a real status, and everything is saved together.
 export const updateOrder = async (req, res) => {
   try {
-    const {
-      booking_id,       // Required
-      order_status,
-      is_paid,
-      transcation_id,
-      start_date,
-      end_date,
-      num_of_days,
-      crop_type_id,
-      land_in_acers,
-      price,
-      tax,
-      total_price,
-      cupon_id,
-      discount,
-      user_id,
-
-      address           // Optional object
-    } = req.body;
+    const body = req.body || {};
+    const { booking_id, order_status, address } = body;
 
     if (!booking_id) {
       return res.status(400).json({ message: "booking_id is required" });
     }
+    if (order_status !== undefined && !VALID_ORDER_STATUSES.has(order_status)) {
+      return res.status(400).json({ message: `order_status must be one of: ${[...VALID_ORDER_STATUSES].join(", ")}` });
+    }
 
-    // Find order
-    const order = await SprayingOrder.findOne({ where: { booking_id } });
-    if (!order) return res.status(404).json({ message: "Order not found" });
+    const has = (key) => body[key] !== undefined && body[key] !== null && body[key] !== "";
+    const number = (key, { min = 0, integer = false } = {}) => {
+      const n = Number(body[key]);
+      if (!Number.isFinite(n) || n < min || (integer && !Number.isInteger(n))) {
+        throw new ApiError(400, `${key} must be ${integer ? "a whole number" : "a number"} of ${min} or more`);
+      }
+      return n;
+    };
 
-    // Update order
-    await order.update({
-      start_date: start_date || order.start_date,
-      end_date: end_date || order.end_date,
-      num_of_days: num_of_days || order.num_of_days,
-      crop_type_id: crop_type_id || order.crop_type_id,
-      land_in_acers: land_in_acers || order.land_in_acers,
-      price: price || order.price,
-      tax: tax || order.tax,
-      total_price: total_price || order.total_price,
-      cupon_id: cupon_id || order.cupon_id,
-      discount: discount || order.discount,
-      user_id: user_id || order.user_id,
-      is_paid: is_paid !== undefined ? is_paid : order.is_paid,
-      transcation_id: transcation_id || order.transcation_id,
+    const changes = {};
+    if (has("start_date")) {
+      const d = parseDateOnly(body.start_date);
+      if (!d) throw new ApiError(400, "start_date must be a valid date (YYYY-MM-DD)");
+      changes.start_date = d;
+    }
+    if (has("end_date")) {
+      const d = parseDateOnly(body.end_date);
+      if (!d) throw new ApiError(400, "end_date must be a valid date (YYYY-MM-DD)");
+      changes.end_date = d;
+    }
+    if (has("num_of_days")) changes.num_of_days = number("num_of_days", { min: 1, integer: true });
+    if (has("land_in_acers")) {
+      changes.land_in_acers = number("land_in_acers");
+      if (changes.land_in_acers <= 0) throw new ApiError(400, "land_in_acers must be greater than 0");
+    }
+    if (has("crop_type_id")) {
+      if (!(await db.MasterCrop.findByPk(body.crop_type_id))) throw new ApiError(400, "Invalid crop_type_id");
+      changes.crop_type_id = body.crop_type_id;
+    }
+    if (has("user_id")) {
+      if (!(await User.findByPk(body.user_id, { attributes: ["id"] }))) throw new ApiError(400, "user_id does not match an existing user");
+      changes.user_id = Number(body.user_id);
+    }
+    if (body.is_paid !== undefined) changes.is_paid = body.is_paid === true || body.is_paid === "true";
+    if (has("transcation_id")) changes.transcation_id = String(body.transcation_id).slice(0, 255);
+    if (body.cupon_id !== undefined) changes.cupon_id = body.cupon_id === null || body.cupon_id === "" ? null : Number(body.cupon_id);
+    if (address) {
+      const problem = await checkLocationChain(db, address);
+      if (problem) throw new ApiError(400, `address: ${problem}`);
+    }
+
+    const result = await db.sequelize.transaction(async (t) => {
+      const order = await SprayingOrder.findOne({ where: { booking_id }, transaction: t, lock: t.LOCK.UPDATE });
+      if (!order) return { status: 404, body: { message: "Order not found" } };
+
+      // Money: any change to price, tax or discount recalculates the total; a "total_price" from the client is ignored
+      const priceTouched = has("price") || has("tax") || has("discount") || has("total_price");
+      if (priceTouched) {
+        const price = has("price") ? number("price") : Number(order.price) || 0;
+        const tax = has("tax") ? number("tax") : Number(order.tax) || 0;
+        const discount = has("discount") ? number("discount") : Number(order.discount) || 0;
+        if (discount > price + tax) throw new ApiError(400, "discount cannot be more than the price plus tax");
+        Object.assign(changes, { price, tax, discount, total_price: roundMoney(price + tax - discount) });
+      }
+
+      const start = changes.start_date || order.start_date;
+      const end = changes.end_date || order.end_date;
+      if (start && end && new Date(end) < new Date(start)) throw new ApiError(400, "end_date cannot be before start_date");
+
+      if (Object.keys(changes).length > 0) {
+        await order.update({ ...changes, modified_on: new Date(), modified_by: req.auth?.id ?? null }, { transaction: t });
+      }
+
+      if (order_status && order_status !== order.order_status) {
+        await updateOrderStatus(booking_id, order_status, "Status updated by admin", req.auth?.id ?? null, t);
+        // A cancelled/rejected booking must stop blocking the pilot's and drone's calendar
+        if (CLOSING_STATUSES.includes(order_status)) {
+          await SprayingDailyLogs.update({ is_active: false, modified_on: new Date() }, { where: { spraying_work_id: booking_id }, transaction: t });
+        }
+      }
+
+      if (address) {
+        const existing = await SprayingOrderAddress.findOne({ where: { order_id: booking_id }, transaction: t });
+        const fields = Object.fromEntries(Object.entries({
+          state: address.state, district: address.district, block: address.block, village: address.village,
+          lane1: address.lane1 ?? address.address1, lane2: address.lane2 ?? address.address2,
+          address1: address.address1 ?? address.lane1, address2: address.address2 ?? address.lane2,
+          pincode: address.pincode,
+        }).filter(([, v]) => v !== undefined && v !== null && v !== ""));
+        if (existing) await existing.update(fields, { transaction: t });
+        else await SprayingOrderAddress.create({ order_id: booking_id, ...fields }, { transaction: t });
+      }
+
+      return { status: 200, body: { message: "Order and address updated successfully" } };
     });
 
-    if (order_status && order_status !== order.order_status) {
-      await updateOrderStatus(booking_id, order_status, "Status updated by admin");
-    }
-
-    // Update or create address
-    if (address) {
-      const existingAddress = await SprayingOrderAddress.findOne({ where: { order_id: booking_id } });
-
-      if (existingAddress) {
-        // Update existing address
-        await existingAddress.update({
-          state: address.state || existingAddress.state,
-          district: address.district || existingAddress.district,
-          block: address.block || existingAddress.block,
-          village: address.village || existingAddress.village,
-          address1: address.address1 || existingAddress.address1,
-          address2: address.address2 || existingAddress.address2,
-        });
-      } else {
-        // Create new address
-        await SprayingOrderAddress.create({
-          order_id: booking_id,
-          state: address.state,
-          district: address.district,
-          block: address.block,
-          village: address.village,
-          address1: address.address1,
-          address2: address.address2,
-        });
-      }
-    }
-
-    res.status(200).json({ message: "Order and address updated successfully" });
-
+    return res.status(result.status).json(result.body);
   } catch (error) {
-    console.error("Error updating order:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "updateOrder");
   }
 };
 
+// "Delete" cancels the order and frees its calendar; the row stays. Hard-deleting it used to leave the working
+// days, assignees, timeline and comments pointing at an order that no longer existed, and those orphaned days
+// kept the pilot and the drone "busy" forever.
 export const deleteOrderById = async (req, res) => {
   try {
-    const { booking_id } = req.body;
+    const { booking_id } = req.body || {};
+    if (!booking_id) return res.status(400).json({ message: "booking_id is required" });
 
-    // Find the order first
-    const order = await SprayingOrder.findOne({ where: { booking_id } });
-    if (!order) return res.status(404).json({ message: "Order not found" });
+    const result = await db.sequelize.transaction(async (t) => {
+      const order = await SprayingOrder.findOne({ where: { booking_id }, transaction: t, lock: t.LOCK.UPDATE });
+      if (!order) return { status: 404, body: { message: "Order not found" } };
 
-    // Delete the associated address (if any)
-    await SprayingOrderAddress.destroy({ where: { order_id: booking_id } });
+      const logs = await SprayingDailyLogs.findAll({ where: { spraying_work_id: booking_id }, transaction: t });
+      if (order.is_paid || logs.some((l) => ["started", "completed"].includes(getDayStatus(l)))) {
+        return {
+          status: 409,
+          body: { message: "This order has payments or work on it and cannot be deleted. Cancel it instead.", code: "ORDER_HAS_ACTIVITY" },
+        };
+      }
 
-    // Delete the main order
-    await SprayingOrder.destroy({ where: { booking_id } });
+      if (order.order_status !== OrderStatusEnum.ORDER_CANCELLED) {
+        await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_CANCELLED, "Order deleted by admin", req.auth?.id ?? null, t);
+      }
+      await SprayingDailyLogs.update({ is_active: false, modified_on: new Date() }, { where: { spraying_work_id: booking_id }, transaction: t });
+      await SprayingWorkAssignee.update({ is_active: false, modified_on: new Date() }, { where: { booking_id }, transaction: t });
+      await order.update({ is_active: false, modified_on: new Date(), modified_by: req.auth?.id ?? null }, { transaction: t });
 
-    res.status(200).json({
-      message: "Order and associated address deleted successfully",
+      return { status: 200, body: { message: "Order deleted successfully" } };
     });
+
+    return res.status(result.status).json(result.body);
   } catch (error) {
-    console.error("Error deleting order:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "deleteOrderById");
   }
 };
 
@@ -2395,1679 +2082,197 @@ export const updateWork = async (req, res) => {
 };
 
 
-// export const assignWork = async (req, res) => {
-//   try {
-//     const { booking_id } = req.params;
-//     const { pilot, copilot, drone_id, working_date } = req.body;
+// // assignWork lives in availabilityController.js (the version routed at POST /order/assign-work/:booking_id).
+// The older copy that used to be here stored un-normalised dates and ignored drone_id, so it was removed.
 
-//     if (!booking_id || !pilot || !copilot || !drone_id || !Array.isArray(working_date)) {
-//       return res.status(400).json({ message: "Missing required fields" });
-//     }
+// registerFarmer, registerPilot, sendOtp and verifyOtp live in registration.controller.js and otp.controller.js.
+// The copies that used to be here trusted client-supplied `role` / `isverifyEmail` flags and are gone on purpose.
 
-//     const updatedDates = [];
+const generateOtp = () => randomInt(100000, 1000000).toString();
 
-//     // Loop through each working date
-//     for (const date of working_date) {
-//       // Convert to proper date format
-//       const formattedDate = new Date(date);
 
-//       // Check if a daily log already exists for this booking_id and date
-//       const existingLog = await SprayingDailyLogs.findOne({
-//         where: { spraying_work_id: booking_id, working_date: formattedDate },
-//       });
+// ── farmer-edit / pilot-edit ─────────────────────────────────────
 
-//       if (existingLog) {
-//         // If exists, check if pilot, co-pilot, or drone changed
-//         const { pilot_user_id, co_pilot_user_id } = existingLog;
+/**
+ * Who edits whom, and is it allowed: a user edits their own profile, an administrator anyone's. The target must
+ * really be a farmer (farmer-edit) or a pilot (pilot-edit).
+ * `user_id` arrives as text in a multipart form ("5"): it used to be compared with `!==` against the numeric id
+ * from the token, so a user sending their own id was refused as if editing someone else.
+ */
+const resolveEditTarget = async (req, input, kind) => {
+  const loggedInUserId = Number(req.user?.id || req.user?.userId);
+  if (!loggedInUserId) throw new ApiError(401, "Unauthorized: Access token is missing or invalid");
 
-//         if (
-//           pilot_user_id !== pilot ||
-//           co_pilot_user_id !== copilot
-//         ) {
-//           // Update pilot / copilot fields
-//           await existingLog.update({
-//             pilot_user_id: pilot,
-//             co_pilot_user_id: copilot,
-//             modified_on: new Date(),
-//           });
-//           updatedDates.push({ date, action: "updated existing daily log" });
-//         } else {
-//           updatedDates.push({ date, action: "no change" });
-//         }
-//       } else {
-//         // If not exist, create new record
-//         await SprayingDailyLogs.create({
-//           spraying_work_id: booking_id,
-//           pilot_user_id: pilot,
-//           co_pilot_user_id: copilot,
-//           working_date: formattedDate,
-//           created_on: new Date(),
-//           is_active: true,
-//         });
-//         updatedDates.push({ date, action: "created new daily log" });
-//       }
-//     }
-
-//     // 🔹 Update SprayingOrder end date if needed
-//     const latestDate = new Date(Math.max(...working_date.map(d => new Date(d))));
-//     const sprayingOrder = await SprayingOrder.findOne({ where: { booking_id } });
-
-//     if (sprayingOrder && sprayingOrder.end_date) {
-//       const currentEndDate = new Date(sprayingOrder.end_date);
-//       if (latestDate > currentEndDate) {
-//         await sprayingOrder.update({ end_date: latestDate });
-//       }
-//     }
-
-//     // 🔹 Check SprayingWorkAssignee
-//     const existingAssignee = await SprayingWorkAssignee.findOne({ where: { booking_id } });
-
-//     if (existingAssignee) {
-//       if (
-//         existingAssignee.pilot_user_id !== pilot ||
-//         existingAssignee.co_pilot_user_id !== copilot ||
-//         existingAssignee.drone_id !== drone_id
-//       ) {
-//         // If any difference, create new row
-//         await SprayingWorkAssignee.create({
-//           booking_id,
-//           pilot_user_id: pilot,
-//           co_pilot_user_id: copilot,
-//           drone_id,
-//           created_on: new Date(),
-//         });
-//       }
-//     } else {
-//       // No assignee record yet → create one
-//       await SprayingWorkAssignee.create({
-//         booking_id,
-//         pilot_user_id: pilot,
-//         co_pilot_user_id: copilot,
-//         drone_id,
-//         created_on: new Date(),
-//       });
-//     }
-
-//     res.status(200).json({
-//       message: "Work assigned successfully",
-//       result: updatedDates,
-//     });
-//   } catch (error) {
-//     console.error("Error assigning work:", error);
-//     res.status(500).json({ error: error.message });
-//   }
-// };
-
-const parseToDate = (d) => {
-  // Accept DD-MM-YYYY or YYYY-MM-DD (or other valid Date strings)
-  if (!d) return null;
-  if (typeof d !== "string") return new Date(d);
-
-  // match dd-mm-yyyy or d-m-yyyy
-  const dm = d.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-  if (dm) {
-    const day = Number(dm[1]);
-    const month = Number(dm[2]) - 1; // JS months 0-11
-    const year = Number(dm[3]);
-    // create date at midnight local time
-    return new Date(year, month, day);
+  const targetUserId = input.user_id ?? loggedInUserId;
+  const callerIsAdmin = await isActivatedAdmin(loggedInUserId);
+  if (targetUserId !== loggedInUserId && !callerIsAdmin) {
+    throw new ApiError(403, "Unauthorized to update another user's profile.");
   }
 
-  // fallback: let Date parse (ISO or other)
-  return new Date(d);
+  const targetUser = await User.findByPk(targetUserId);
+  if (!targetUser) throw new ApiError(404, "User not found");
+
+  const roles = await loadRoleNames(targetUserId);
+  const rightKind = kind === "farmer"
+    ? isFarmerAccount(targetUser.user_type, roles)
+    : roles.includes("pilot") || (roles.length === 0 && targetUser.user_type === 2);
+  if (!rightKind) throw new ApiError(400, kind === "farmer" ? "Target user is not a Farmer." : "Target user is not a Pilot.");
+
+  return { loggedInUserId, targetUser, editedByAdmin: callerIsAdmin };
 };
 
-export const assignWork = async (req, res) => {
-  try {
-    const { booking_id } = req.params;
-    const { pilot, copilot, drone_id, working_date } = req.body;
-
-    // ✅ Validation
-    if (!booking_id || !pilot || !copilot || !drone_id || !Array.isArray(working_date)) {
-      return res.status(400).json({ message: "Missing required fields" });
-    }
-
-    // ✅ Convert and sort working dates (ascending)
-    const sortedDates = working_date
-      .map(d => new Date(d))
-      .sort((a, b) => a - b);
-
-    const updatedDates = [];
-
-    // ✅ Loop through each date
-    for (const date of sortedDates) {
-      const formattedDate = new Date(date);
-
-      // Check if a log already exists for this booking_id & date
-      const existingLog = await SprayingDailyLogs.findOne({
-        where: { spraying_work_id: booking_id, working_date: formattedDate },
-      });
-
-      if (existingLog) {
-        const { pilot_user_id, co_pilot_user_id } = existingLog;
-
-        if (pilot_user_id !== pilot || co_pilot_user_id !== copilot) {
-          // Update pilot or copilot if changed
-          await existingLog.update({
-            pilot_user_id: pilot,
-            co_pilot_user_id: copilot,
-            modified_on: new Date(),
-          });
-          updatedDates.push({ date: formattedDate, action: "updated existing daily log" });
-        } else {
-          updatedDates.push({ date: formattedDate, action: "no change" });
-        }
-      } else {
-        // Create new log
-        await SprayingDailyLogs.create({
-          spraying_work_id: booking_id,
-          pilot_user_id: pilot,
-          co_pilot_user_id: copilot,
-          working_date: formattedDate,
-          created_on: new Date(),
-          is_active: true,
-        });
-        updatedDates.push({ date: formattedDate, action: "created new daily log" });
+/**
+ * The User row changes shared by both edits: identity (see services/identity.service.js), username, password.
+ * Changing your own password needs the current one; any password change signs other devices out (their refresh
+ * token stops working).
+ */
+const userChanges = async ({ input, body, targetUser, editedByAdmin, loggedInUserId }) => {
+  const changes = await resolveIdentityChange(targetUser, input, { editedByAdmin });
+  if (input.username) changes.username = input.username;
+  if (input.password) {
+    if (!editedByAdmin) {
+      const current = typeof body.current_password === "string" ? body.current_password : "";
+      if (!current) throw new ApiError(400, "Enter your current password to set a new one.");
+      if (!targetUser.password || !(await bcrypt.compare(current, targetUser.password))) {
+        throw new ApiError(400, "Current password is incorrect.");
       }
     }
-
-    // ✅ Update SprayingOrder start_date and end_date
-    const earliestDate = sortedDates[0];
-    const latestDate = sortedDates[sortedDates.length - 1];
-
-    const sprayingOrder = await SprayingOrder.findOne({ where: { booking_id } });
-
-    if (sprayingOrder) {
-      const currentStartDate = new Date(sprayingOrder.start_date);
-      const currentEndDate = new Date(sprayingOrder.end_date);
-
-      const updateData = {};
-      if (earliestDate < currentStartDate) {
-        updateData.start_date = earliestDate;
-      }
-      if (latestDate > currentEndDate) {
-        updateData.end_date = latestDate;
-      }
-
-      if (Object.keys(updateData).length > 0) {
-        await sprayingOrder.update(updateData);
-      }
-    }
-
-    // ✅ Handle SprayingWorkAssignee
-    const existingAssignee = await SprayingWorkAssignee.findOne({ where: { booking_id } });
-
-    if (existingAssignee) {
-      if (
-        existingAssignee.pilot_user_id !== pilot ||
-        existingAssignee.co_pilot_user_id !== copilot ||
-        existingAssignee.drone_id !== drone_id
-      ) {
-        // Create new row if any changes found
-        await SprayingWorkAssignee.create({
-          booking_id,
-          pilot_user_id: pilot,
-          co_pilot_user_id: copilot,
-          drone_id,
-          created_on: new Date(),
-        });
-      }
-    } else {
-      // Create new if none exist
-      await SprayingWorkAssignee.create({
-        booking_id,
-        pilot_user_id: pilot,
-        co_pilot_user_id: copilot,
-        drone_id,
-        created_on: new Date(),
-      });
-    }
-
-    // ✅ Final Response
-    res.status(200).json({
-      message: "Work assigned successfully",
-      result: updatedDates,
-    });
-
-  } catch (error) {
-    console.error("Error assigning work:", error);
-    res.status(500).json({ error: error.message });
+    changes.password = await bcrypt.hash(input.password, 10);
+    changes.refresh_token = null;
   }
+  changes.modified_by = loggedInUserId;
+  changes.modified_on = new Date();
+  return changes;
 };
 
-export const registerPilot = async (req, res) => {
-  try {
-    // -------------------------------------------------------------
-    // Optional Authenticated User Check (Creator ID)
-    // -------------------------------------------------------------
-    let creatorId = null;
-    const authHeader = req.headers["authorization"];
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.split(" ")[1];
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        creatorId = decoded.id || decoded.userId;
-      } catch (err) {
-        return res.status(401).json({ success: false, error: "Invalid or expired token." });
-      }
-    }
-
-    const body = req.body || {};
-    const {
-      first_name,
-      last_name,
-      mobile_number,
-      dob,
-      email,
-      password,
-      role, // expected to be 2
-      upi_id,
-      aadhar_number,
-      pan_card_number,
-      isverifyEmail,
-      isMobileVerify
-    } = body;
-
-    // -------------------------------------------------------------
-    // 1. Validations
-    // -------------------------------------------------------------
-    if (!first_name || !first_name.trim()) {
-      return res.status(400).json({ success: false, error: "First name is required" });
-    }
-    if (!last_name || !last_name.trim()) {
-      return res.status(400).json({ success: false, error: "Last name is required" });
-    }
-    if (!email || !email.trim()) {
-      return res.status(400).json({ success: false, error: "Email is required" });
-    }
-    if (!password || !password.trim()) {
-      return res.status(400).json({ success: false, error: "Password is required" });
-    }
-    if (!mobile_number) {
-      return res.status(400).json({ success: false, error: "Mobile number is required" });
-    }
-
-    // Mobile validation: 10 digits
-    const mobileStr = String(mobile_number).trim();
-    if (!/^\d{10}$/.test(mobileStr)) {
-      return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
-    }
-
-    // Email regex validation with @ and .com
-    const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
-    if (!emailRegex.test(email.trim())) {
-      return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
-    }
-
-    if (email.trim().toLowerCase() === mobileStr.toLowerCase()) {
-      return res.status(400).json({ success: false, error: "Mobile number and email cannot be the same" });
-    }
-
-    const isEmailVerified = isverifyEmail === true || isverifyEmail === 'true';
-    const isMobileVerified = isMobileVerify === true || isMobileVerify === 'true';
-
-    if (!isEmailVerified && !isMobileVerified) {
-      return res.status(400).json({ success: false, error: "At least email or mobile verification must be completed first." });
-    }
-
-    // UPI ID regex validation
-    if (upi_id) {
-      const upiRegex = /^[\w.-]+@[\w.-]+$/;
-      if (!upiRegex.test(upi_id.trim())) {
-        return res.status(400).json({ success: false, error: "Invalid UPI ID format" });
-      }
-    }
-
-    // Dynamically lookup the Pilot role in the database
-    const pilotRole = await db.MasterRole.findOne({
-      where: {
-        role_name: { [db.Sequelize.Op.iLike]: 'Pilot' }
-      }
-    });
-    if (!pilotRole) {
-      return res.status(400).json({ success: false, error: "Role validation failed: 'Pilot' role is not configured in the database" });
-    }
-
-    // Check duplication: email and mobile number checks
-    const existingUserByEmail = await User.findOne({ where: { email: email.trim() } });
-    if (existingUserByEmail) {
-      return res.status(400).json({ success: false, error: "User already exists with this email" });
-    }
-
-    const existingUserByMobile = await User.findOne({ where: { mobile_number: mobileStr } });
-    if (existingUserByMobile) {
-      return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
-    }
-
-    // Parse bank_details & address (handling both JSON string and raw body properties)
-    let parsedBankDetails = [];
-    if (body.bank_details) {
-      try {
-        const parsed = JSON.parse(body.bank_details);
-        parsedBankDetails = Array.isArray(parsed) ? parsed : [parsed];
-      } catch (e) {
-        // Fallback for form fields
-        parsedBankDetails = [{
-          bank_name: body.bank_name,
-          acc_holder_name: body.acc_holder_name,
-          acc_number: body.acc_number,
-          ifsc_code: body.ifsc_code,
-          is_primary: body.is_primary === 'true' || body.is_primary === true
-        }];
-      }
-    } else if (body.bank_name) {
-      parsedBankDetails = [{
-        bank_name: body.bank_name,
-        acc_holder_name: body.acc_holder_name,
-        acc_number: body.acc_number,
-        ifsc_code: body.ifsc_code,
-        is_primary: body.is_primary === 'true' || body.is_primary === true
-      }];
-    }
-
-    let parsedAddress = [];
-    if (body.address) {
-      try {
-        const parsed = JSON.parse(body.address);
-        parsedAddress = Array.isArray(parsed) ? parsed : [parsed];
-      } catch (e) {
-        parsedAddress = [{
-          state: body.state,
-          district: body.district,
-          block: body.block,
-          lane1: body.lane1 || body.lane_1,
-          lane2: body.lane2 || body.lane_2,
-          village: body.village,
-          pincode: body.pincode,
-          is_primary: body.is_primary === 'true' || body.is_primary === true
-        }];
-      }
-    } else if (body.state || body.lane1 || body.lane_1 || body.pincode || body.district) {
-      parsedAddress = [{
-        state: body.state,
-        district: body.district,
-        block: body.block,
-        lane1: body.lane1 || body.lane_1,
-        lane2: body.lane2 || body.lane_2,
-        village: body.village,
-        pincode: body.pincode,
-        is_primary: body.is_primary === 'true' || body.is_primary === true
-      }];
-    }
-
-    // -------------------------------------------------------------
-    // 2. Validate and upload file fields
-    // -------------------------------------------------------------
-    const validateFile = (file, allowedTypes, label) => {
-      if (!file) return;
-      if (file.size > 5 * 1024 * 1024) {
-        throw new Error(`${label} file exceeds the 5MB size limit.`);
-      }
-      const ext = file.originalname.split('.').pop().toLowerCase();
-      const mime = file.mimetype;
-      const isValid = allowedTypes.includes(ext) || allowedTypes.some(type => mime.includes(type));
-      if (!isValid) {
-        throw new Error(`${label} has an invalid format. Allowed: ${allowedTypes.join(', ')}`);
-      }
-    };
-
-    const fileFields = [
-      { key: 'profile_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Profile photo', docType: 5 },
-      { key: 'aaddhar_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Aadhar Card', docType: 10 },
-      { key: 'pan_card_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Pan Card', docType: 15 },
-      { key: 'dcga_pilot_cert', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI Pilot Cert', docType: 20 },
-      { key: 'dcga_pilot_license', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI License', docType: 25 },
-      { key: 'medical_certificate', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Medical Cert', docType: 30 },
-      { key: 'insurance_doc', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Insurance Doc', docType: 35 },
-      { key: 'passbook_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Passbook photo', isBank: true }
-    ];
-
-    const uploadedFilesData = {};
-    for (const field of fileFields) {
-      const fileArray = req.files && req.files[field.key];
-      if (fileArray && fileArray.length > 0) {
-        uploadedFilesData[field.key] = [];
-        for (const file of fileArray) {
-          // Validate size and extensions
-          validateFile(file, field.allowed, field.label);
-          // Detect if it is a PDF to use the "raw" resource type
-          const ext = file.originalname.split('.').pop().toLowerCase();
-          const resourceType = (ext === 'pdf') ? 'raw' : 'auto';
-          // Upload to Cloudinary
-          const result = await uploadToCloudinary(file.buffer, "pilots", resourceType, file.originalname);
-          uploadedFilesData[field.key].push({
-            original_name: file.originalname,
-            new_name: result.public_id,
-            url: result.secure_url
-          });
-        }
-      }
-    }
-
-    // -------------------------------------------------------------
-    // 3. Password hashing
-    // -------------------------------------------------------------
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const parseDOB = (dobStr) => {
-      if (!dobStr) return null;
-      const parts = dobStr.split('/');
-      if (parts.length === 3) {
-        const day = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10) - 1;
-        const year = parseInt(parts[2], 10);
-        return new Date(year, month, day);
-      }
-      return new Date(dobStr);
-    };
-
-    // -------------------------------------------------------------
-    // 4. Save using Sequelize Transaction
-    // -------------------------------------------------------------
-    const registeredUser = await db.sequelize.transaction(async (t) => {
-      // a. Create User record
-      const newUser = await User.create({
-        email: email.trim(),
-        password: hashedPassword,
-        username: `${first_name.trim()}_${last_name.trim()}_${Date.now()}`.substring(0, 50),
-        mobile_number: mobileStr,
-        is_superuser: false,
-        user_type: 2, // 2 = Pilot / User type 2
-        isMobileVerify: isMobileVerified,
-        isEmailVerify: isEmailVerified,
-        created_by: creatorId || null
-      }, { transaction: t });
-
-      const finalCreatorId = creatorId || newUser.id;
-
-      const userRefId = `PIL-${String(newUser.id).padStart(5, '0')}`;
-      const updates = { user_ref_id: userRefId };
-      if (!creatorId) {
-        updates.created_by = finalCreatorId;
-      }
-      await newUser.update(updates, { transaction: t });
-
-      // b. Assign Role in USER_ROLE
-      await UserRole.create({
-        user_id: newUser.id,
-        role_id: pilotRole.id,
-        created_by: finalCreatorId
-      }, { transaction: t });
-
-      // c. Create User Profile
-      await UserProfile.create({
-        user_id: newUser.id,
-        first_name: first_name.trim(),
-        last_name: last_name.trim(),
-        whatsapp_number: mobileStr,
-        dob: parseDOB(dob),
-        aadhar_number: aadhar_number ? String(aadhar_number).trim() : null,
-        pan_card_number: pan_card_number ? String(pan_card_number).trim() : null,
-        user_image_original_filename: uploadedFilesData['profile_image']?.[0]?.original_name || null,
-        user_image_new_filename: uploadedFilesData['profile_image']?.[0]?.new_name || null,
-        user_image_url: uploadedFilesData['profile_image']?.[0]?.url || null,
-        created_by: finalCreatorId
-      }, { transaction: t });
-
-      // d. Create User Address
-      if (parsedAddress && parsedAddress.length > 0) {
-        for (const addrData of parsedAddress) {
-          await UserAddress.create({
-            user_id: newUser.id,
-            state: addrData.state ? Number(addrData.state) : null,
-            district: addrData.district ? Number(addrData.district) : null,
-            block: addrData.block ? Number(addrData.block) : null,
-            lane_1: addrData.lane1 || addrData.lane_1 || "",
-            lane_2: addrData.lane2 || addrData.lane_2 || "",
-            village: addrData.village || "N/A",
-            pincode: addrData.pincode || "000000",
-            is_primary: addrData.is_primary === true || addrData.is_primary === 'true',
-            created_by: finalCreatorId
-          }, { transaction: t });
-        }
-      }
-
-      // e. Create Bank Details
-      if (parsedBankDetails && parsedBankDetails.length > 0) {
-        for (const bank of parsedBankDetails) {
-          if (bank.bank_name || bank.acc_number) {
-            await db.UserBankDetails.create({
-              user_id: newUser.id,
-              bank_name: bank.bank_name || "N/A",
-              acc_holder_name: bank.acc_holder_name || "N/A",
-              acc_number: bank.acc_number || "N/A",
-              ifsc_code: bank.ifsc_code || "N/A",
-              passbook_image_url: uploadedFilesData['passbook_image']?.[0]?.url || null,
-              is_primary: bank.is_primary === true || bank.is_primary === 'true',
-              is_active: true,
-              created_by: finalCreatorId
-            }, { transaction: t });
-          }
-        }
-      }
-
-      // f. Create UPI Details
-      if (upi_id) {
-        await db.UserUpiDetails.create({
-          user_id: newUser.id,
-          upi_id: upi_id.trim(),
-          created_by: finalCreatorId
-        }, { transaction: t });
-      }
-
-      // g. Save files into USER_DOCUMENTS
-      const docsToSave = fileFields.filter(f => !f.isBank && uploadedFilesData[f.key]);
-      for (const doc of docsToSave) {
-        const fileInfos = uploadedFilesData[doc.key];
-        if (Array.isArray(fileInfos)) {
-          for (const docInfo of fileInfos) {
-            await db.UserDocuments.create({
-              user_id: newUser.id,
-              document_type: doc.docType,
-              document_original_name: docInfo.original_name,
-              document_new_name: docInfo.new_name,
-              document_url: docInfo.url,
-              is_active: true,
-              created_by: finalCreatorId
-            }, { transaction: t });
-          }
-        }
-      }
-
-      return newUser;
-    });
-
-    // -------------------------------------------------------------
-    // 5. Generate JWT Access Token
-    // -------------------------------------------------------------
-    const token = jwt.sign(
-      { id: registeredUser.id, email: registeredUser.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "3d" }
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: "Pilot registered successfully",
-      user_id: registeredUser.id,
-      token
-    });
-
-  } catch (error) {
-    console.error("🔥 PILOT REGISTRATION ERROR:", error);
-    return res.status(error.message && error.message.includes('file') ? 400 : 500).json({
-      success: false,
-      message: "Pilot registration failed",
-      error: error.message
-    });
+const saveProfile = async ({ targetUser, input, extra, image, loggedInUserId }, t) => {
+  const fields = { ...extra, modified_by: loggedInUserId, modified_on: new Date() };
+  if (input.first_name) fields.first_name = input.first_name;
+  if (input.last_name) fields.last_name = input.last_name;
+  if (input.dob) fields.dob = input.dob;
+  if (image) {
+    fields.user_image_original_filename = image.original_name;
+    fields.user_image_new_filename = image.new_name;
+    fields.user_image_url = image.url;
   }
+  const existing = await UserProfile.findOne({ where: { user_id: targetUser.id }, transaction: t });
+  if (existing) return existing.update(fields, { transaction: t });
+  return UserProfile.create({
+    user_id: targetUser.id,
+    first_name: input.first_name || targetUser.username || "",
+    last_name: input.last_name || "",
+    whatsapp_number: targetUser.mobile_number,
+    ...fields,
+    created_by: loggedInUserId,
+  }, { transaction: t });
 };
 
-export const registerFarmer = async (req, res) => {
-  try {
-    // -------------------------------------------------------------
-    // Optional Authenticated User Check (Creator ID)
-    // -------------------------------------------------------------
-    let creatorId = null;
-    const authHeader = req.headers["authorization"];
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.split(" ")[1];
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        creatorId = decoded.id || decoded.userId;
-      } catch (err) {
-        return res.status(401).json({ success: false, error: "Invalid or expired token." });
-      }
-    }
-
-    const body = req.body || {};
-    const {
-      first_name,
-      last_name,
-      mobile_number,
-      dob,
-      email,
-      password,
-      role,
-      isverifyEmail,
-      isMobileVerify
-    } = body;
-
-    // -------------------------------------------------------------
-    // 1. Validations
-    // -------------------------------------------------------------
-    if (!first_name || !first_name.trim()) {
-      return res.status(400).json({ success: false, error: "First name is required" });
-    }
-    if (!last_name || !last_name.trim()) {
-      return res.status(400).json({ success: false, error: "Last name is required" });
-    }
-    if (!email || !email.trim()) {
-      return res.status(400).json({ success: false, error: "Email is required" });
-    }
-    if (!password || !password.trim()) {
-      return res.status(400).json({ success: false, error: "Password is required" });
-    }
-    if (!mobile_number) {
-      return res.status(400).json({ success: false, error: "Mobile number is required" });
-    }
-
-    // Mobile validation: 10 digits (strip country code prefix if present)
-    let mobileStr = String(mobile_number).replace(/\D/g, '');
-    if (mobileStr.length > 10) {
-      mobileStr = mobileStr.slice(-10);
-    }
-    if (!/^\d{10}$/.test(mobileStr)) {
-      return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
-    }
-
-    // Standard email regex validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-    if (!emailRegex.test(email.trim())) {
-      return res.status(400).json({ success: false, error: "Invalid email format" });
-    }
-
-    if (email.trim().toLowerCase() === mobileStr.toLowerCase()) {
-      return res.status(400).json({ success: false, error: "Mobile number and email cannot be the same" });
-    }
-
-    const isEmailVerified = isverifyEmail === true || isverifyEmail === 'true';
-    const isMobileVerified = isMobileVerify === true || isMobileVerify === 'true';
-
-    if (!isEmailVerified && !isMobileVerified) {
-      return res.status(400).json({ success: false, error: "At least email or mobile verification must be completed first." });
-    }
-
-    // Dynamic Role Lookup: find by role ID if provided, else find by name 'Farmer', or fallback create
-    let farmerRole = null;
-    if (role) {
-      farmerRole = await db.MasterRole.findByPk(Number(role));
-    }
-    if (!farmerRole) {
-      farmerRole = await db.MasterRole.findOne({
-        where: {
-          role_name: { [db.Sequelize.Op.iLike]: 'Farmer' }
-        }
-      });
-    }
-    if (!farmerRole) {
-      farmerRole = await db.MasterRole.create({
-        role_name: 'Farmer',
-        role_desc: 'Farmer user role',
-        is_active: true
-      });
-    }
-
-    // Check duplication: email and mobile checks
-    const existingUserByEmail = await User.findOne({ where: { email: email.trim() } });
-    if (existingUserByEmail) {
-      return res.status(400).json({ success: false, error: "User already exists with this email" });
-    }
-
-    const existingUserByMobile = await User.findOne({ where: { mobile_number: mobileStr } });
-    if (existingUserByMobile) {
-      return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
-    }
-
-    // Parse address
-    let parsedAddress = [];
-    if (body.address) {
-      try {
-        const parsed = JSON.parse(body.address);
-        parsedAddress = Array.isArray(parsed) ? parsed : [parsed];
-      } catch (e) {
-        parsedAddress = [{
-          state: body.state,
-          district: body.district,
-          block: body.block,
-          lane1: body.lane1 || body.lane_1,
-          lane2: body.lane2 || body.lane_2,
-          village: body.village,
-          pincode: body.pincode,
-          is_primary: body.is_primary === 'true' || body.is_primary === true
-        }];
-      }
-    } else if (body.state || body.lane1 || body.lane_1 || body.pincode || body.district) {
-      parsedAddress = [{
-        state: body.state,
-        district: body.district,
-        block: body.block,
-        lane1: body.lane1 || body.lane_1,
-        lane2: body.lane2 || body.lane_2,
-        village: body.village,
-        pincode: body.pincode,
-        is_primary: body.is_primary === 'true' || body.is_primary === true
-      }];
-    }
-
-    // -------------------------------------------------------------
-    // 2. Validate and upload profile image file
-    // -------------------------------------------------------------
-    let uploadedFileDetails = null;
-    if (req.file) {
-      const file = req.file;
-      if (file.size > 5 * 1024 * 1024) {
-        return res.status(400).json({ success: false, error: "Profile photo exceeds the 5MB size limit." });
-      }
-      const ext = file.originalname.split('.').pop().toLowerCase();
-      const mime = file.mimetype;
-      const allowed = ['jpg', 'jpeg', 'png'];
-      const isValid = allowed.includes(ext) || allowed.some(type => mime.includes(type));
-      if (!isValid) {
-        return res.status(400).json({ success: false, error: "Profile photo has an invalid format. Allowed: jpg, jpeg, png" });
-      }
-
-      // Upload to Cloudinary
-      const result = await uploadToCloudinary(file.buffer, "farmers", "auto", file.originalname);
-      uploadedFileDetails = {
-        original_name: file.originalname,
-        new_name: result.public_id,
-        url: result.secure_url
-      };
-    }
-
-    // -------------------------------------------------------------
-    // 3. Password hashing
-    // -------------------------------------------------------------
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const parseDOB = (dobStr) => {
-      if (!dobStr) return null;
-      const parts = dobStr.split('/');
-      if (parts.length === 3) {
-        const day = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10) - 1;
-        const year = parseInt(parts[2], 10);
-        return new Date(year, month, day);
-      }
-      return new Date(dobStr);
-    };
-
-    // -------------------------------------------------------------
-    // 4. Save using Sequelize Transaction
-    // -------------------------------------------------------------
-    const registeredUser = await db.sequelize.transaction(async (t) => {
-      // a. Create User record
-      const newUser = await User.create({
-        email: email.trim(),
-        password: hashedPassword,
-        username: `${first_name.trim()}_${last_name.trim()}_${Date.now()}`.substring(0, 50),
-        mobile_number: mobileStr,
-        is_superuser: false,
-        user_type: 3, // 3 = Farmer
-        isMobileVerify: isMobileVerified,
-        isEmailVerify: isEmailVerified,
-        created_by: creatorId || null
-      }, { transaction: t });
-
-      const finalCreatorId = creatorId || newUser.id;
-
-      const userRefId = `FAM-${String(newUser.id).padStart(5, '0')}`;
-      const updates = { user_ref_id: userRefId };
-      if (!creatorId) {
-        updates.created_by = finalCreatorId;
-      }
-      await newUser.update(updates, { transaction: t });
-
-      // b. Assign Role in USER_ROLE
-      await UserRole.create({
-        user_id: newUser.id,
-        role_id: farmerRole.id,
-        created_by: finalCreatorId
-      }, { transaction: t });
-
-      // c. Create User Profile
-      await UserProfile.create({
-        user_id: newUser.id,
-        first_name: first_name.trim(),
-        last_name: last_name.trim(),
-        whatsapp_number: mobileStr,
-        dob: parseDOB(dob),
-        user_image_original_filename: uploadedFileDetails?.original_name || null,
-        user_image_new_filename: uploadedFileDetails?.new_name || null,
-        user_image_url: uploadedFileDetails?.url || null,
-        created_by: finalCreatorId
-      }, { transaction: t });
-
-      // d. Create User Address
-      if (parsedAddress && parsedAddress.length > 0) {
-        for (const addrData of parsedAddress) {
-          await UserAddress.create({
-            user_id: newUser.id,
-            state: addrData.state ? Number(addrData.state) : null,
-            district: addrData.district ? Number(addrData.district) : null,
-            block: addrData.block ? Number(addrData.block) : null,
-            lane_1: addrData.lane1 || addrData.lane_1 || "",
-            lane_2: addrData.lane2 || addrData.lane_2 || "",
-            village: addrData.village || "N/A",
-            pincode: addrData.pincode || "000000",
-            is_primary: addrData.is_primary === true || addrData.is_primary === 'true',
-            created_by: finalCreatorId
-          }, { transaction: t });
-        }
-      }
-
-      return newUser;
-    });
-
-    // -------------------------------------------------------------
-    // 5. Generate JWT Access Token
-    // -------------------------------------------------------------
-    const token = jwt.sign(
-      { id: registeredUser.id, email: registeredUser.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "3d" }
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: "Farmer registered successfully",
-      user_id: registeredUser.id,
-      token
-    });
-
-  } catch (error) {
-    console.error("🔥 FARMER REGISTRATION ERROR:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Farmer registration failed",
-      error: error.message
-    });
-  }
-};
-
-export const sendOtp = async (req, res) => {
-  try {
-    const { email, mobile_number, purpose } = req.body;
-
-    const emailStr = email && email.trim() ? email.trim() : null;
-    const mobileStr = mobile_number && String(mobile_number).trim() ? String(mobile_number).trim() : null;
-
-    if (!emailStr && !mobileStr) {
-      return res.status(400).json({ success: false, error: "Either email or mobile number must be provided" });
-    }
-
-    if (emailStr) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
-      if (!emailRegex.test(emailStr)) {
-        return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
-      }
-    }
-
-    if (mobileStr) {
-      if (!/^\d{10}$/.test(mobileStr)) {
-        return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
-      }
-    }
-
-    if (emailStr && mobileStr && emailStr.toLowerCase() === mobileStr.toLowerCase()) {
-      return res.status(400).json({ success: false, error: "Mobile number and email cannot be the same" });
-    }
-
-    // Only fail if the user exists when the purpose is specifically for "registration" or undefined
-    const isRegistration = !purpose || purpose === "registration";
-
-    if (isRegistration) {
-      const orConditions = [];
-      if (emailStr) orConditions.push({ email: emailStr });
-      if (mobileStr) orConditions.push({ mobile_number: mobileStr });
-
-      const existingUser = await User.findOne({
-        where: {
-          [db.Sequelize.Op.or]: orConditions
-        }
-      });
-
-      if (existingUser) {
-        if (emailStr && existingUser.email === emailStr) {
-          return res.status(400).json({ success: false, error: "User already exists with this email" });
-        }
-        if (mobileStr && existingUser.mobile_number === mobileStr) {
-          return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
-        }
-      }
-    }
-
-    // Check optional authentication to track who requested the OTP (for auditing)
-    let creatorId = null;
-    const authHeader = req.headers["authorization"];
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.split(" ")[1];
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        creatorId = decoded.id || decoded.userId;
-      } catch (err) {
-        // Ignore token errors for optional auditing
-      }
-    }
-
-    // Generate random 6-digit OTPs only for requested channels
-    const emailOtp = emailStr ? Math.floor(100000 + Math.random() * 900000).toString() : null;
-    const mobileOtp = mobileStr ? Math.floor(100000 + Math.random() * 900000).toString() : null;
-    const expiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 minutes expiry
-
-    // Save to OtpVerification table
-    await OtpVerification.create({
-      email: emailStr,
-      mobile_number: mobileStr,
-      email_otp: emailOtp,
-      mobile_otp: mobileOtp,
-      expires_at: expiresAt,
-      is_email_verified: false,
-      is_mobile_verified: false,
-      created_by: creatorId || null
-    });
-
-    // Send Email if applicable
-    if (emailStr && emailOtp) {
-      await sendOtpEmail(emailStr, emailOtp);
-    }
-
-    // Send SMS (Dev Logger) if applicable
-    if (mobileStr && mobileOtp) {
-      console.log(`\n📱 [SMS OTP Logger] ───────────────────────────`);
-      console.log(`To:      ${mobileStr}`);
-      console.log(`OTP:     ${mobileOtp}`);
-      console.log(`──────────────────────────────────────────────\n`);
-    }
-
-    let successMessage = "OTP sent successfully.";
-    if (emailStr && mobileStr) {
-      successMessage = "OTPs sent successfully to email and mobile number.";
-    } else if (emailStr) {
-      successMessage = "OTP sent successfully to email.";
-    } else if (mobileStr) {
-      successMessage = "OTP sent successfully to mobile number.";
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: successMessage,
-      dev_otps: process.env.NODE_ENV !== 'production' ? { email_otp: emailOtp, mobile_otp: mobileOtp } : undefined
-    });
-
-  } catch (error) {
-    console.error("🔥 SEND OTP ERROR:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to send OTP",
-      error: error.message
-    });
-  }
-};
-
-export const verifyOtp = async (req, res) => {
-  try {
-    const { email, mobile_number, email_otp, mobile_otp } = req.body;
-
-    const emailStr = email && email.trim() ? email.trim() : null;
-    const mobileStr = mobile_number && String(mobile_number).trim() ? String(mobile_number).trim() : null;
-
-    if (!emailStr && !mobileStr) {
-      return res.status(400).json({ success: false, error: "Either email or mobile number must be provided" });
-    }
-
-    const queryWhere = {};
-    if (emailStr) queryWhere.email = emailStr;
-    if (mobileStr) queryWhere.mobile_number = mobileStr;
-
-    // Find latest OTP record matching the criteria
-    const otpRecord = await OtpVerification.findOne({
-      where: queryWhere,
-      order: [['created_on', 'DESC']]
-    });
-
-    if (!otpRecord) {
-      return res.status(400).json({ success: false, error: "OTP has expired or no request was generated for this email/mobile." });
-    }
-
-    const maxAttempts = parseInt(process.env.MAX_OTP_ATTEMPTS || '3', 10);
-    if (otpRecord.attempts >= maxAttempts) {
-      return res.status(400).json({ success: false, error: "You have hit the maximum attempts. Please generate another OTP." });
-    }
-
-    if (new Date() > new Date(otpRecord.expires_at)) {
-      return res.status(400).json({ success: false, error: "OTP has expired" });
-    }
-
-    let isMobileVerify = false;
-    let isEmailVerify = false;
-
-    // Validate email OTP if email is sent
-    if (emailStr) {
-      if (!email_otp) {
-        return res.status(400).json({ success: false, error: "Email OTP is required." });
-      }
-      if (otpRecord.email_otp !== String(email_otp).trim()) {
-        await otpRecord.increment('attempts');
-        await otpRecord.reload();
-        if (otpRecord.attempts >= maxAttempts) {
-          return res.status(400).json({ success: false, error: "You have hit the maximum attempts. Please generate another OTP." });
-        }
-        return res.status(400).json({ success: false, error: "Invalid email OTP provided." });
-      }
-      isEmailVerify = true;
-    }
-
-    // Validate mobile OTP if mobile is sent
-    if (mobileStr) {
-      if (!mobile_otp) {
-        return res.status(400).json({ success: false, error: "Mobile OTP is required." });
-      }
-      if (otpRecord.mobile_otp !== String(mobile_otp).trim()) {
-        await otpRecord.increment('attempts');
-        await otpRecord.reload();
-        if (otpRecord.attempts >= maxAttempts) {
-          return res.status(400).json({ success: false, error: "You have hit the maximum attempts. Please generate another OTP." });
-        }
-        return res.status(400).json({ success: false, error: "Invalid mobile OTP provided." });
-      }
-      isMobileVerify = true;
-    }
-
-    // Update verified fields in OtpVerification
-    const updateFields = { modified_on: new Date() };
-    if (isEmailVerify) updateFields.is_email_verified = true;
-    if (isMobileVerify) updateFields.is_mobile_verified = true;
-    await otpRecord.update(updateFields);
-
-    let message = "";
-    if (isEmailVerify && isMobileVerify) {
-      message = "Both verified successfully.";
-    } else if (isEmailVerify) {
-      message = "Email is verified successfully.";
-    } else if (isMobileVerify) {
-      message = "Mobile is verified successfully.";
-    }
-
-    return res.status(200).json({
-      success: true,
-      message,
-      isMobileVerify,
-      isEmailVerify
-    });
-
-  } catch (error) {
-    console.error("🔥 VERIFY OTP ERROR:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to verify OTP",
-      error: error.message
-    });
+/** Sent addresses (validated against the location tables) replace the stored ones. */
+const replaceAddresses = async (userId, addresses, loggedInUserId, t) => {
+  if (!addresses.length) return;
+  await UserAddress.destroy({ where: { user_id: userId }, transaction: t });
+  for (const address of addresses) {
+    await UserAddress.create({ user_id: userId, ...address, created_by: loggedInUserId, modified_by: loggedInUserId, modified_on: new Date() }, { transaction: t });
   }
 };
 
 export const updatePilot = async (req, res) => {
+  let uploaded = [];
   try {
-    const loggedInUserId = req.user?.id || req.user?.userId;
-    if (!loggedInUserId) {
-      return res.status(401).json({ success: false, error: "Unauthorized: Access token is missing or invalid" });
-    }
-
     const body = req.body || {};
-    const {
-      user_id, // Target user to update (optional, defaults to logged-in user)
-      first_name,
-      last_name,
-      dob,
-      password,
-      username,
-      upi_id,
-      aadhar_number,
-      pan_card_number,
-      email,
-      mobile_number
-    } = body;
+    const input = parseOrThrow(farmerEditSchema, body);
+    const { loggedInUserId, targetUser, editedByAdmin } = await resolveEditTarget(req, input, "pilot");
 
-    const targetUserId = user_id || loggedInUserId;
+    const userUpdate = await userChanges({ input, body, targetUser, editedByAdmin, loggedInUserId });
+    const addresses = await buildAddresses(db, parseAddressInput(body));
+    const banks = readBankDetails(body);                                   // null: not sent, keep the stored ones
+    const upiId = body.upi_id !== undefined ? readUpiId(body.upi_id) : undefined;
+    const extra = {};
+    if (body.aadhar_number !== undefined && body.aadhar_number !== "") extra.aadhar_number = readAadhar(body.aadhar_number);
+    if (body.pan_card_number !== undefined && body.pan_card_number !== "") extra.pan_card_number = readPan(body.pan_card_number);
 
-    // Authorization: If updating someone else, loggedInUserId must be an Admin
-    if (targetUserId !== loggedInUserId) {
-      const userRole = await UserRole.findOne({ where: { user_id: loggedInUserId } });
-      let isAdmin = false;
-      if (userRole) {
-        const role = await db.MasterRole.findByPk(userRole.role_id);
-        if (role && role.role_name.toLowerCase().includes("admin")) {
-          isAdmin = true;
-        }
-      }
-      const loggedInUser = await User.findByPk(loggedInUserId);
-      if (!loggedInUser?.is_superuser && !isAdmin) {
-        return res.status(403).json({ success: false, error: "Unauthorized to update another user's profile." });
-      }
-    }
-
-    const targetUser = await User.findByPk(targetUserId);
-    if (!targetUser) {
-      return res.status(404).json({ success: false, error: "User not found" });
-    }
-
-    if (email !== undefined && email !== null) {
-      const emailStr = email.trim();
-      const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
-      if (!emailRegex.test(emailStr)) {
-        return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
-      }
-      if (emailStr !== targetUser.email) {
-        const emailExists = await User.findOne({ where: { email: emailStr, id: { [db.Sequelize.Op.ne]: targetUserId } } });
-        if (emailExists) {
-          return res.status(400).json({ success: false, error: "User already exists with this email" });
-        }
-      }
-    }
-
-    if (mobile_number !== undefined && mobile_number !== null) {
-      const mobileStr = String(mobile_number).trim();
-      if (!/^\d{10}$/.test(mobileStr)) {
-        return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
-      }
-      if (mobileStr !== targetUser.mobile_number) {
-        const mobileExists = await User.findOne({ where: { mobile_number: mobileStr, id: { [db.Sequelize.Op.ne]: targetUserId } } });
-        if (mobileExists) {
-          return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
-        }
-      }
-    }
-
-    // Verify target user is a Pilot
-    const targetUserRole = await UserRole.findOne({ where: { user_id: targetUserId } });
-    if (targetUserRole) {
-      const role = await db.MasterRole.findByPk(targetUserRole.role_id);
-      if (!role || !role.role_name.toLowerCase().includes("pilot")) {
-        return res.status(400).json({ success: false, error: "Target user is not a Pilot." });
-      }
-    }
-
-    // Parse bank_details & address
-    let parsedBankDetails = null;
-    if (body.bank_details) {
-      try {
-        const parsed = JSON.parse(body.bank_details);
-        parsedBankDetails = Array.isArray(parsed) ? parsed : [parsed];
-      } catch (e) {
-        parsedBankDetails = [{
-          bank_name: body.bank_name,
-          acc_holder_name: body.acc_holder_name,
-          acc_number: body.acc_number,
-          ifsc_code: body.ifsc_code,
-          is_primary: body.is_primary === 'true' || body.is_primary === true
-        }];
-      }
-    } else if (body.bank_name) {
-      parsedBankDetails = [{
-        bank_name: body.bank_name,
-        acc_holder_name: body.acc_holder_name,
-        acc_number: body.acc_number,
-        ifsc_code: body.ifsc_code,
-        is_primary: body.is_primary === 'true' || body.is_primary === true
-      }];
-    }
-
-    let parsedAddress = null;
-    if (body.address) {
-      try {
-        const parsed = JSON.parse(body.address);
-        parsedAddress = Array.isArray(parsed) ? parsed : [parsed];
-      } catch (e) {
-        parsedAddress = [{
-          state: body.state,
-          district: body.district,
-          block: body.block,
-          lane1: body.lane1 || body.lane_1,
-          lane2: body.lane2 || body.lane_2,
-          village: body.village,
-          pincode: body.pincode,
-          is_primary: body.is_primary === 'true' || body.is_primary === true
-        }];
-      }
-    } else if (body.state || body.lane1 || body.lane_1 || body.pincode || body.district) {
-      parsedAddress = [{
-        state: body.state,
-        district: body.district,
-        block: body.block,
-        lane1: body.lane1 || body.lane_1,
-        lane2: body.lane2 || body.lane_2,
-        village: body.village,
-        pincode: body.pincode,
-        is_primary: body.is_primary === 'true' || body.is_primary === true
-      }];
-    }
-
-    // Validate and upload files
-    const validateFile = (file, allowedTypes, label) => {
-      if (!file) return;
-      if (file.size > 5 * 1024 * 1024) {
-        throw new Error(`${label} file exceeds the 5MB size limit.`);
-      }
-      const ext = file.originalname.split('.').pop().toLowerCase();
-      const mime = file.mimetype;
-      const isValid = allowedTypes.includes(ext) || allowedTypes.some(type => mime.includes(type));
-      if (!isValid) {
-        throw new Error(`${label} has an invalid format. Allowed: ${allowedTypes.join(', ')}`);
-      }
-    };
-
-    const fileFields = [
-      { key: 'profile_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Profile photo', docType: 5 },
-      { key: 'aaddhar_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Aadhar Card', docType: 10 },
-      { key: 'pan_card_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Pan Card', docType: 15 },
-      { key: 'dcga_pilot_cert', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI Pilot Cert', docType: 20 },
-      { key: 'dcga_pilot_license', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI License', docType: 25 },
-      { key: 'medical_certificate', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Medical Cert', docType: 30 },
-      { key: 'insurance_doc', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Insurance Doc', docType: 35 },
-      { key: 'passbook_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Passbook photo', isBank: true }
-    ];
-
-    const uploadedFilesData = {};
-    for (const field of fileFields) {
-      const fileArray = req.files && req.files[field.key];
-      if (fileArray && fileArray.length > 0) {
-        uploadedFilesData[field.key] = [];
-        for (const file of fileArray) {
-          validateFile(file, field.allowed, field.label);
-          const ext = file.originalname.split('.').pop().toLowerCase();
-          const resourceType = (ext === 'pdf') ? 'raw' : 'auto';
-          const result = await uploadToCloudinary(file.buffer, "pilots", resourceType, file.originalname);
-          uploadedFilesData[field.key].push({
-            original_name: file.originalname,
-            new_name: result.public_id,
-            url: result.secure_url
-          });
-        }
-      }
-    }
-
-    const parseDOB = (dobStr) => {
-      if (!dobStr) return null;
-      const parts = dobStr.split('/');
-      if (parts.length === 3) {
-        const day = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10) - 1;
-        const year = parseInt(parts[2], 10);
-        return new Date(year, month, day);
-      }
-      return new Date(dobStr);
-    };
+    const upload = await uploadPilotFiles(req.files, uploadToCloudinary);
+    uploaded = upload.uploaded;
+    const { files } = upload;
 
     await db.sequelize.transaction(async (t) => {
-      // 1. Update basic User info
-      const userUpdateFields = {};
-      if (password && password.trim()) {
-        userUpdateFields.password = await bcrypt.hash(password, 10);
-      }
-      if (username && username.trim()) {
-        userUpdateFields.username = username.trim();
-      }
-      if (email !== undefined && email !== null) {
-        userUpdateFields.email = email.trim();
-      }
-      if (mobile_number !== undefined && mobile_number !== null) {
-        userUpdateFields.mobile_number = String(mobile_number).trim();
-      }
-      userUpdateFields.modified_by = loggedInUserId;
-      userUpdateFields.modified_on = new Date();
+      await targetUser.update(userUpdate, { transaction: t });
+      await consumeIdentityVerification(userUpdate, t);
+      await saveProfile({ targetUser, input, extra, image: files.profile_image?.[0], loggedInUserId }, t);
+      await replaceAddresses(targetUser.id, addresses, loggedInUserId, t);
 
-      await targetUser.update(userUpdateFields, { transaction: t });
-
-      // 2. Update User Profile
-      const existingProfile = await UserProfile.findOne({ where: { user_id: targetUserId }, transaction: t });
-      const profileUpdateFields = {
-        modified_by: loggedInUserId,
-        modified_on: new Date()
-      };
-      if (first_name) profileUpdateFields.first_name = first_name.trim();
-      if (last_name) profileUpdateFields.last_name = last_name.trim();
-      if (dob) profileUpdateFields.dob = parseDOB(dob);
-      if (aadhar_number) profileUpdateFields.aadhar_number = String(aadhar_number).trim();
-      if (pan_card_number) profileUpdateFields.pan_card_number = String(pan_card_number).trim();
-
-      if (uploadedFilesData['profile_image']?.[0]) {
-        profileUpdateFields.user_image_original_filename = uploadedFilesData['profile_image'][0].original_name;
-        profileUpdateFields.user_image_new_filename = uploadedFilesData['profile_image'][0].new_name;
-        profileUpdateFields.user_image_url = uploadedFilesData['profile_image'][0].url;
-      }
-
-      if (existingProfile) {
-        await existingProfile.update(profileUpdateFields, { transaction: t });
-      } else {
-        await UserProfile.create({
-          user_id: targetUserId,
-          first_name: first_name || "N/A",
-          last_name: last_name || "N/A",
-          whatsapp_number: targetUser.mobile_number,
-          ...profileUpdateFields,
-          created_by: loggedInUserId
-        }, { transaction: t });
-      }
-
-      // 3. Update User Address (recreate all to support multiple addresses)
-      if (parsedAddress && parsedAddress.length > 0) {
-        await UserAddress.destroy({ where: { user_id: targetUserId }, transaction: t });
-        for (const addrData of parsedAddress) {
-          await UserAddress.create({
-            user_id: targetUserId,
-            state: addrData.state ? Number(addrData.state) : null,
-            district: addrData.district ? Number(addrData.district) : null,
-            block: addrData.block ? Number(addrData.block) : null,
-            lane_1: addrData.lane1 || addrData.lane_1 || "",
-            lane_2: addrData.lane2 || addrData.lane_2 || "",
-            village: addrData.village || "N/A",
-            pincode: addrData.pincode || "000000",
-            is_primary: addrData.is_primary === true || addrData.is_primary === 'true',
-            created_by: loggedInUserId,
-            modified_by: loggedInUserId,
-            modified_on: new Date()
+      const passbookUrl = files.passbook_image?.[0]?.url;
+      if (banks && banks.length > 0) {
+        await db.UserBankDetails.destroy({ where: { user_id: targetUser.id }, transaction: t });
+        for (const bank of banks) {
+          await db.UserBankDetails.create({
+            user_id: targetUser.id, ...bank, passbook_image_url: passbookUrl || null,
+            is_active: true, created_by: loggedInUserId, modified_by: loggedInUserId,
           }, { transaction: t });
         }
+      } else if (passbookUrl) {
+        await db.UserBankDetails.update(
+          { passbook_image_url: passbookUrl, modified_by: loggedInUserId, modified_on: new Date() },
+          { where: { user_id: targetUser.id, is_primary: true }, transaction: t },
+        );
       }
 
-      // 4. Update Bank Details (only if bank_details was supplied)
-      if (parsedBankDetails && parsedBankDetails.length > 0) {
-        await db.UserBankDetails.destroy({ where: { user_id: targetUserId }, transaction: t });
-        for (const bank of parsedBankDetails) {
-          if (bank.bank_name || bank.acc_number) {
-            await db.UserBankDetails.create({
-              user_id: targetUserId,
-              bank_name: bank.bank_name || "N/A",
-              acc_holder_name: bank.acc_holder_name || "N/A",
-              acc_number: bank.acc_number || "N/A",
-              ifsc_code: bank.ifsc_code || "N/A",
-              passbook_image_url: uploadedFilesData['passbook_image']?.[0]?.url || null,
-              is_primary: bank.is_primary === true || bank.is_primary === 'true',
-              is_active: true,
-              created_by: loggedInUserId,
-              modified_by: loggedInUserId
-            }, { transaction: t });
-          }
+      if (upiId !== undefined) {
+        await db.UserUpiDetails.destroy({ where: { user_id: targetUser.id }, transaction: t });
+        if (upiId) {
+          await db.UserUpiDetails.create({ user_id: targetUser.id, upi_id: upiId, created_by: loggedInUserId, modified_by: loggedInUserId }, { transaction: t });
         }
-      } else if (uploadedFilesData['passbook_image']?.[0]) {
-        const primaryBank = await db.UserBankDetails.findOne({ where: { user_id: targetUserId, is_primary: true }, transaction: t });
-        if (primaryBank) {
-          await primaryBank.update({
-            passbook_image_url: uploadedFilesData['passbook_image'][0].url,
-            modified_by: loggedInUserId,
-            modified_on: new Date()
+      }
+
+      // New certificates replace the stored ones of the same type (all of the new files are kept: the old code
+      // deleted inside the loop, so only the last of several uploaded files survived)
+      for (const field of PILOT_FILES.filter((f) => !f.isBank && files[f.key])) {
+        await db.UserDocuments.destroy({ where: { user_id: targetUser.id, document_type: field.docType }, transaction: t });
+        for (const info of files[field.key]) {
+          await db.UserDocuments.create({
+            user_id: targetUser.id, document_type: field.docType,
+            document_original_name: info.original_name, document_new_name: info.new_name, document_url: info.url,
+            is_active: true, created_by: loggedInUserId, modified_by: loggedInUserId,
           }, { transaction: t });
-        }
-      }
-
-      // 5. Update UPI Details
-      if (upi_id !== undefined) {
-        await db.UserUpiDetails.destroy({ where: { user_id: targetUserId }, transaction: t });
-        if (upi_id && upi_id.trim()) {
-          await db.UserUpiDetails.create({
-            user_id: targetUserId,
-            upi_id: upi_id.trim(),
-            created_by: loggedInUserId,
-            modified_by: loggedInUserId
-          }, { transaction: t });
-        }
-      }
-
-      // 6. Update User Documents (append new rows if certificates uploaded)
-      const docsToSave = fileFields.filter(f => !f.isBank && uploadedFilesData[f.key]);
-      for (const doc of docsToSave) {
-        const fileInfos = uploadedFilesData[doc.key];
-        if (Array.isArray(fileInfos)) {
-          for (const docInfo of fileInfos) {
-            await db.UserDocuments.destroy({ where: { user_id: targetUserId, document_type: doc.docType }, transaction: t });
-
-            await db.UserDocuments.create({
-              user_id: targetUserId,
-              document_type: doc.docType,
-              document_original_name: docInfo.original_name,
-              document_new_name: docInfo.new_name,
-              document_url: docInfo.url,
-              is_active: true,
-              created_by: loggedInUserId,
-              modified_by: loggedInUserId
-            }, { transaction: t });
-          }
         }
       }
     });
 
-    return res.status(200).json({
-      success: true,
-      message: "Pilot profile updated successfully."
-    });
-
+    return res.status(200).json({ success: true, message: "Pilot profile updated successfully." });
   } catch (error) {
-    console.error("🔥 PILOT UPDATE ERROR:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Pilot profile update failed",
-      error: error.message
-    });
+    await discardUploads(uploaded);
+    return respondWithError(req, res, error, "updatePilot");
   }
 };
 
 export const updateFarmer = async (req, res) => {
+  const uploaded = [];
   try {
-    const loggedInUserId = req.user?.id || req.user?.userId;
-    if (!loggedInUserId) {
-      return res.status(401).json({ success: false, error: "Unauthorized: Access token is missing or invalid" });
-    }
-
     const body = req.body || {};
-    const {
-      user_id, // Target user to update (optional, defaults to logged-in user)
-      first_name,
-      last_name,
-      dob,
-      password,
-      username,
-      email,
-      mobile_number
-    } = body;
+    const input = parseOrThrow(farmerEditSchema, body);
+    const { loggedInUserId, targetUser, editedByAdmin } = await resolveEditTarget(req, input, "farmer");
 
-    const targetUserId = user_id || loggedInUserId;
+    const userUpdate = await userChanges({ input, body, targetUser, editedByAdmin, loggedInUserId });
+    const addresses = await buildAddresses(db, parseAddressInput(body));
 
-    // Authorization: If updating someone else, loggedInUserId must be an Admin
-    if (targetUserId !== loggedInUserId) {
-      const userRole = await UserRole.findOne({ where: { user_id: loggedInUserId } });
-      let isAdmin = false;
-      if (userRole) {
-        const role = await db.MasterRole.findByPk(userRole.role_id);
-        if (role && role.role_name.toLowerCase().includes("admin")) {
-          isAdmin = true;
-        }
-      }
-      const loggedInUser = await User.findByPk(loggedInUserId);
-      if (!loggedInUser?.is_superuser && !isAdmin) {
-        return res.status(403).json({ success: false, error: "Unauthorized to update another user's profile." });
-      }
-    }
-
-    const targetUser = await User.findByPk(targetUserId);
-    if (!targetUser) {
-      return res.status(404).json({ success: false, error: "User not found" });
-    }
-
-    if (email !== undefined && email !== null) {
-      const emailStr = email.trim();
-      const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
-      if (!emailRegex.test(emailStr)) {
-        return res.status(400).json({ success: false, error: "Invalid email format. Must contain @ and end with .com" });
-      }
-      if (emailStr !== targetUser.email) {
-        const emailExists = await User.findOne({ where: { email: emailStr, id: { [db.Sequelize.Op.ne]: targetUserId } } });
-        if (emailExists) {
-          return res.status(400).json({ success: false, error: "User already exists with this email" });
-        }
-      }
-    }
-
-    if (mobile_number !== undefined && mobile_number !== null) {
-      const mobileStr = String(mobile_number).trim();
-      if (!/^\d{10}$/.test(mobileStr)) {
-        return res.status(400).json({ success: false, error: "Mobile number must be exactly 10 digits" });
-      }
-      if (mobileStr !== targetUser.mobile_number) {
-        const mobileExists = await User.findOne({ where: { mobile_number: mobileStr, id: { [db.Sequelize.Op.ne]: targetUserId } } });
-        if (mobileExists) {
-          return res.status(400).json({ success: false, error: "User already exists with this mobile number" });
-        }
-      }
-    }
-
-    // Verify target user is a Farmer
-    const targetUserRole = await UserRole.findOne({ where: { user_id: targetUserId } });
-    if (targetUserRole) {
-      const role = await db.MasterRole.findByPk(targetUserRole.role_id);
-      if (!role || !role.role_name.toLowerCase().includes("farmer")) {
-        return res.status(400).json({ success: false, error: "Target user is not a Farmer." });
-      }
-    }
-
-    // Parse address
-    let parsedAddress = null;
-    if (body.address) {
-      try {
-        const parsed = JSON.parse(body.address);
-        parsedAddress = Array.isArray(parsed) ? parsed : [parsed];
-      } catch (e) {
-        parsedAddress = [{
-          state: body.state,
-          district: body.district,
-          block: body.block,
-          lane1: body.lane1 || body.lane_1,
-          lane2: body.lane2 || body.lane_2,
-          village: body.village,
-          pincode: body.pincode,
-          is_primary: body.is_primary === 'true' || body.is_primary === true
-        }];
-      }
-    } else if (body.state || body.lane1 || body.lane_1 || body.pincode || body.district) {
-      parsedAddress = [{
-        state: body.state,
-        district: body.district,
-        block: body.block,
-        lane1: body.lane1 || body.lane_1,
-        lane2: body.lane2 || body.lane_2,
-        village: body.village,
-        pincode: body.pincode,
-        is_primary: body.is_primary === 'true' || body.is_primary === true
-      }];
-    }
-
-    // Process profile image
-    let uploadedFileDetails = null;
+    let image = null;
     if (req.file) {
-      const file = req.file;
-      if (file.size > 5 * 1024 * 1024) {
-        return res.status(400).json({ success: false, error: "Profile photo exceeds the 5MB size limit." });
-      }
-      const ext = file.originalname.split('.').pop().toLowerCase();
-      const mime = file.mimetype;
-      const allowed = ['jpg', 'jpeg', 'png'];
-      const isValid = allowed.includes(ext) || allowed.some(type => mime.includes(type));
-      if (!isValid) {
-        return res.status(400).json({ success: false, error: "Profile photo has an invalid format. Allowed: jpg, jpeg, png" });
-      }
-
-      const result = await uploadToCloudinary(file.buffer, "farmers", "auto", file.originalname);
-      uploadedFileDetails = {
-        original_name: file.originalname,
-        new_name: result.public_id,
-        url: result.secure_url
-      };
+      validateImage(req.file, "Profile photo", ["jpg", "jpeg", "png"]);
+      const result = await uploadToCloudinary(req.file.buffer, "farmers", "auto", req.file.originalname);
+      image = { original_name: req.file.originalname, new_name: result.public_id, url: result.secure_url, resource_type: "image" };
+      uploaded.push(image);
     }
-
-    const parseDOB = (dobStr) => {
-      if (!dobStr) return null;
-      const parts = dobStr.split('/');
-      if (parts.length === 3) {
-        const day = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10) - 1;
-        const year = parseInt(parts[2], 10);
-        return new Date(year, month, day);
-      }
-      return new Date(dobStr);
-    };
 
     await db.sequelize.transaction(async (t) => {
-      // 1. Update basic User info
-      const userUpdateFields = {};
-      if (password && password.trim()) {
-        userUpdateFields.password = await bcrypt.hash(password, 10);
-      }
-      if (username && username.trim()) {
-        userUpdateFields.username = username.trim();
-      }
-      if (email !== undefined && email !== null) {
-        userUpdateFields.email = email.trim();
-      }
-      if (mobile_number !== undefined && mobile_number !== null) {
-        userUpdateFields.mobile_number = String(mobile_number).trim();
-      }
-      userUpdateFields.modified_by = loggedInUserId;
-      userUpdateFields.modified_on = new Date();
-
-      await targetUser.update(userUpdateFields, { transaction: t });
-
-      // 2. Update User Profile
-      const existingProfile = await UserProfile.findOne({ where: { user_id: targetUserId }, transaction: t });
-      const profileUpdateFields = {
-        modified_by: loggedInUserId,
-        modified_on: new Date()
-      };
-      if (first_name) profileUpdateFields.first_name = first_name.trim();
-      if (last_name) profileUpdateFields.last_name = last_name.trim();
-      if (dob) profileUpdateFields.dob = parseDOB(dob);
-
-      if (uploadedFileDetails) {
-        profileUpdateFields.user_image_original_filename = uploadedFileDetails.original_name;
-        profileUpdateFields.user_image_new_filename = uploadedFileDetails.new_name;
-        profileUpdateFields.user_image_url = uploadedFileDetails.url;
-      }
-
-      if (existingProfile) {
-        await existingProfile.update(profileUpdateFields, { transaction: t });
-      } else {
-        await UserProfile.create({
-          user_id: targetUserId,
-          first_name: first_name || "N/A",
-          last_name: last_name || "N/A",
-          whatsapp_number: targetUser.mobile_number,
-          ...profileUpdateFields,
-          created_by: loggedInUserId
-        }, { transaction: t });
-      }
-
-      // 3. Update User Address (recreate all to support multiple addresses)
-      if (parsedAddress && parsedAddress.length > 0) {
-        await UserAddress.destroy({ where: { user_id: targetUserId }, transaction: t });
-        for (const addrData of parsedAddress) {
-          await UserAddress.create({
-            user_id: targetUserId,
-            state: addrData.state ? Number(addrData.state) : null,
-            district: addrData.district ? Number(addrData.district) : null,
-            block: addrData.block ? Number(addrData.block) : null,
-            lane_1: addrData.lane1 || addrData.lane_1 || "",
-            lane_2: addrData.lane2 || addrData.lane_2 || "",
-            village: addrData.village || "N/A",
-            pincode: addrData.pincode || "000000",
-            is_primary: addrData.is_primary === true || addrData.is_primary === 'true',
-            created_by: loggedInUserId,
-            modified_by: loggedInUserId,
-            modified_on: new Date()
-          }, { transaction: t });
-        }
-      }
+      await targetUser.update(userUpdate, { transaction: t });
+      await consumeIdentityVerification(userUpdate, t);
+      await saveProfile({ targetUser, input, extra: {}, image, loggedInUserId }, t);
+      await replaceAddresses(targetUser.id, addresses, loggedInUserId, t);
     });
 
-    return res.status(200).json({
-      success: true,
-      message: "Farmer profile updated successfully."
-    });
-
+    return res.status(200).json({ success: true, message: "Farmer profile updated successfully." });
   } catch (error) {
-    console.error("🔥 FARMER UPDATE ERROR:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Farmer profile update failed",
-      error: error.message
-    });
+    await discardUploads(uploaded);
+    return respondWithError(req, res, error, "updateFarmer");
   }
 };

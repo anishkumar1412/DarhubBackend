@@ -1,236 +1,115 @@
-import express from "express";
-import cors from 'cors';
-import swaggerUi from 'swagger-ui-express';
-import yaml from 'js-yaml';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import logger from './utils/logger.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// ── Models ────────────────────────────────────────────────────────
-// dotenv is loaded inside config/env.js using an absolute path,
-// which is imported first by models/index.js → config/db.js → config/env.js.
-// No dotenv.config() call needed here.
+import app from './app.js';
 import db, { syncPromise } from './models/index.js';
-
-// ── Route imports ─────────────────────────────────────────────────
-import router from "./routes/adminRoutes.js";
-import userRouter from "./routes/user.routes.js";
-import locationRoutes from "./routes/locationRoutes.js";
-import orderRouter from "./routes/orderRoutes.js";
-import cropRouter from "./routes/cropRoutes.js";
+import env from './config/env.js';
+import logger from './utils/logger.js';
 import { initCronJobs } from './cron/jobs.js';
-import workingDaysRouter from "./routes/workingDaysRoutes.js";
-import fertilizerRouter from "./routes/fertilizerRoutes.js";
-import warehouseRouter from "./routes/warehouseRoutes.js";
+import { verifyEmailConnection } from './services/email.service.js';
+import { bootstrapSuperAdmin } from './bootstrap/superAdmin.bootstrap.js';
+import { closeRateStore, logRateStoreStatus } from './services/rateStore.js';
 
-// Admin auth + management
-import adminAuthRouter from "./routes/adminAuthRoutes.js";
-import adminAccountRouter from "./routes/adminAccountRoutes.js";
-import rolesRouter from "./routes/rolesRoutes.js";
-import privilegesRouter from "./routes/privilegesRoutes.js";
-import rolePrivilegesRouter from "./routes/rolePrivilegesRoutes.js";
-import userRolesRouter from "./routes/userRolesRoutes.js";
-
-// Inventory dashboard
-import inventoryRouter from "./routes/inventoryRoutes.js";
-
-// ── Services / bootstrap ──────────────────────────────────────────
-import { verifyEmailConnection } from "./services/email.service.js";
-import { bootstrapSuperAdmin } from "./bootstrap/superAdmin.bootstrap.js";
-import droneStatusRouter from "./routes/droneStatus.routes.js";   // ← NEW
-
-// Pilot maintenance
-import pilotMaintenanceRouter from "./routes/pilotMaintenanceRoutes.js";
-import vendorRouter from "./routes/vendorRoutes.js";
-
-// Pilot work updates
-import pilotWorkRouter from "./routes/pilotWork.routes.js";
-
-// Farmer-facing booking API
-import farmerRouter from "./routes/farmerRoutes.js";
-
-const app = express();
-const PORT = process.env.PORT || 5678;
+const PORT = env.PORT || 5678;
 const HOST = "0.0.0.0";
+const isProduction = env.NODE_ENV === 'production';
 
-// ── Middlewares ───────────────────────────────────────────────────
-app.use(helmet());
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// ── Graceful Shutdown ─────────────────────────────────────────────
+let shuttingDown = false;
+const shutdown = (reason, exitCode = 0) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`${reason}. Shutting down gracefully.`);
 
-// ── Rate Limiting ─────────────────────────────────────────────────
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Too many requests from this IP, please try again after 15 minutes',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:5174",
-    "https://darhubfrontend.onrender.com",
-    "https://darhubadmin.onrender.com"
-  ],
-  credentials: true,
-}));
+  // Never hang forever on a stuck connection
+  setTimeout(() => {
+    logger.error('Graceful shutdown timed out; forcing exit.');
+    process.exit(exitCode || 1);
+  }, 10_000).unref();
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Apply the rate limiter to all api routes
-app.use('/api', apiLimiter);
-app.use('/admin', apiLimiter);
-app.use('/order', apiLimiter);
-app.use('/crops', apiLimiter);
-app.use('/inventory', apiLimiter);
-app.use('/api/farmer', apiLimiter);
-
-// ── Swagger ───────────────────────────────────────────────────────
-if (process.env.NODE_ENV !== 'production') {
-  const swaggerDocument = yaml.load(
-    fs.readFileSync(path.join(__dirname, 'swagger.yaml'), 'utf8')
-  );
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
-}
-
-// ── Health ────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.send("Welcome to DARHUB Backend"));
-
-// ── Routes ────────────────────────────────────────────────────────
-
-// Existing routes
-app.use('/admin', router);
-app.use('/api', userRouter);
-app.use('/api/locations', locationRoutes);
-app.use('/api/pilot/work', pilotWorkRouter);
-
-app.use('/order', orderRouter);
-app.use('/crops', cropRouter);
-app.use('/working-days', workingDaysRouter);
-app.use('/api/fertilizers', fertilizerRouter);
-app.use('/api/warehouses', warehouseRouter);
-
-// Admin auth (login, setup-password, forgot-password, reset-password, me, create-admin)
-app.use('/admin/auth', adminAuthRouter);
-
-// Admin account (change-password, profile, list/delete admins, resend-setup)
-app.use('/admin/account', adminAccountRouter);
-
-// Roles CRUD
-app.use('/admin/roles', rolesRouter);
-
-// Privileges CRUD
-app.use('/admin/privileges', privilegesRouter);
-
-// Role ↔ Privilege assignments
-app.use('/admin/role-privileges', rolePrivilegesRouter);
-
-// User ↔ Role assignments
-app.use('/admin/user-roles', userRolesRouter);
-
-// Inventory dashboard
-app.use('/inventory', inventoryRouter);
-
-app.use('/api/inventory', inventoryRouter);
-
-app.use('/api/inventory', droneStatusRouter);
-
-// Pilot maintenance task form
-app.use('/api/pilot/maintenance', pilotMaintenanceRouter);
-
-// Vendor management
-app.use('/api/vendors', vendorRouter);
-
-// Farmer-facing booking API
-app.use('/api/farmer', farmerRouter);
-
-// ── Global error handler ──────────────────────────────────────────
-app.use((err, req, res, next) => {
-  const statusCode = err.statusCode || 500;
-
-  logger.error(`[${req.method}] ${req.url} - ${err.message}`, { stack: err.stack });
-
-  const isProduction = process.env.NODE_ENV === 'production';
-  return res.status(statusCode).json({
-    success: false,
-    message: isProduction && statusCode === 500 ? 'Internal Server Error' : err.message,
-    errors: isProduction ? undefined : (err.errors || []),
+  server.close(async () => {
+    logger.info('HTTP server closed.');
+    try {
+      await closeRateStore();
+      await db.sequelize.close();
+      logger.info('Database and Redis connections closed.');
+    } catch (err) {
+      logger.error(`Error closing database connections: ${err.message}`);
+    }
+    process.exit(exitCode);
   });
-});
+};
 
 // ── Uncaught Exception / Rejection Handlers ───────────────────────
+// After an uncaught exception the process state is unknown: log it, finish what can be finished, and exit so the
+// platform restarts a clean instance.
 process.on('uncaughtException', (err) => {
   logger.error(`UNCAUGHT EXCEPTION: ${err.message}`, { stack: err.stack });
-  process.exit(1);
+  shutdown('Uncaught exception', 1);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error(`UNHANDLED REJECTION: ${reason}`);
+process.on('unhandledRejection', (reason) => {
+  logger.error(`UNHANDLED REJECTION: ${reason instanceof Error ? reason.stack : reason}`);
 });
+
+process.on('SIGTERM', () => shutdown('SIGTERM received'));
+process.on('SIGINT', () => shutdown('SIGINT received'));
 
 // ── Start ─────────────────────────────────────────────────────────
+// `sync({ alter: true })` rewrites table definitions to match the models. That is convenient in development but must
+// not run on every production boot (a model typo would alter live tables); opt in with DB_SYNC_ALTER=true.
+const ALTER_SYNC_MODELS = [
+  'Fertilizer',
+  'Warehouse', 'WarehouseLocation', 'WarehouseAdditional',
+  'User', 'UserProfile', 'UserAddress', 'UserUpiDetails', 'UserBankDetails', 'UserDocuments', 'OtpVerification',
+  'SprayingOrderExtras', 'SprayingOrderAddress',
+];
+
 const server = app.listen(PORT, HOST, async () => {
-  initCronJobs();
   logger.info(`🚀 Server running on http://${HOST}:${PORT}`);
-  await verifyEmailConnection();
-  await syncPromise;
+  initCronJobs();
+
+  // Not awaited: an unreachable mail server or Redis must not delay startup
+  verifyEmailConnection();
+  logRateStoreStatus().catch(() => {});
+
   try {
-    await db.Fertilizer.sync({ alter: true });
-    console.log("✅ Fertilizer table synchronized successfully.");
-    await db.Warehouse.sync({ alter: true });
-    await db.WarehouseLocation.sync({ alter: true });
-    await db.WarehouseAdditional.sync({ alter: true });
-    console.log("✅ Warehouse, WarehouseLocation, and WarehouseAdditional tables synchronized successfully.");
-    await db.User.sync({ alter: true });
-    await db.UserProfile.sync({ alter: true });
-    await db.UserAddress.sync({ alter: true });
-    await db.UserUpiDetails.sync({ alter: true });
-    await db.UserBankDetails.sync({ alter: true });
-    await db.UserDocuments.sync({ alter: true });
-    await db.OtpVerification.sync({ alter: true });
-    console.log("✅ User profile, address, bank, UPI, Document, and OTP verification tables synchronized successfully.");
-    await db.SprayingOrderExtras.sync({ alter: true });
-    console.log("✅ SprayingOrderExtras table synchronized successfully.");
+    await syncPromise;
+
+    if (env.DB_SYNC_ALTER ?? !isProduction) {
+      for (const name of ALTER_SYNC_MODELS) {
+        await db[name].sync({ alter: true });
+      }
+      logger.info('✅ Tables synchronized (alter) successfully.');
+    } else {
+      logger.info('Skipping `sync({ alter: true })` in production (set DB_SYNC_ALTER=true to run it).');
+    }
   } catch (syncErr) {
-    console.error("❌ Failed to synchronize database tables:", syncErr);
+    logger.error(`❌ Failed to synchronize database tables: ${syncErr.message}`, { stack: syncErr.stack });
   }
-  await bootstrapSuperAdmin();
+
+  try {
+    await bootstrapSuperAdmin();
+  } catch (bootErr) {
+    logger.error(`❌ Super-admin bootstrap failed: ${bootErr.message}`, { stack: bootErr.stack });
+  }
 
   // ── Self-Ping to Keep Render Free Tier Awake ───────────────────────
-  if (process.env.NODE_ENV === 'development') {
+  // Runs where the server is hosted on Render (Render sets RENDER_EXTERNAL_URL to the service's own address), or
+  // wherever SELF_PING_URL is set. It used to run whenever NODE_ENV was "development", i.e. on every developer
+  // machine, pinging the production URL, and never on a production instance.
+  const PING_URL = process.env.SELF_PING_URL || process.env.RENDER_EXTERNAL_URL;
+  if (PING_URL) {
     const PING_INTERVAL = 14 * 60 * 1000; // 14 minutes
-    const PING_URL = 'https://darhubbackend.onrender.com';
 
     setInterval(async () => {
       try {
         const response = await fetch(PING_URL);
-        console.log(`[Self-Ping] Successfully pinged ${PING_URL}. Status: ${response.status}`);
+        logger.info(`[Self-Ping] Pinged ${PING_URL}. Status: ${response.status}`);
       } catch (err) {
-        console.error(`[Self-Ping] Failed to ping ${PING_URL}:`, err.message);
+        logger.error(`[Self-Ping] Failed to ping ${PING_URL}: ${err.message}`);
       }
-    }, PING_INTERVAL);
+    }, PING_INTERVAL).unref();
   }
 });
 
-// ── Graceful Shutdown ─────────────────────────────────────────────
-const shutdown = () => {
-  logger.info('SIGTERM/SIGINT received. Shutting down gracefully.');
-  server.close(() => {
-    logger.info('HTTP server closed.');
-    // db.sequelize.close() could be called here if db was imported
-    process.exit(0);
-  });
-};
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+// Slightly above common load-balancer idle timeouts (60s), so a keep-alive connection is never reset mid-request
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;

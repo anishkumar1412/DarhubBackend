@@ -1,5 +1,10 @@
 import { Op } from "sequelize";
 import db from "../models/index.js";
+import { OrderStatusEnum } from "../utils/enums.js";
+import { updateOrderStatus } from "../utils/orderUtils.js";
+import { lockKeys } from "../utils/locks.js";
+import { respondWithError } from "../middleware/errorHandler.js";
+import { parseDateOnly, todayIST, getDayStatus, readDayData, stripDecline } from "../utils/dateUtils.js";
 
 const {
   User,
@@ -376,97 +381,215 @@ export const assignWork = async (req, res) => {
         .status(400)
         .json({ message: "booking_id, drone_id and working_date[] are required" });
     }
-
-    // Fallback: If pilot or copilot is not provided, fetch them from the Drone
-    if (!pilot || !copilot) {
-      const droneDetails = await db.Drone1.findByPk(drone_id);
-      if (droneDetails) {
-        if (!pilot) pilot = droneDetails.pilot_user_id;
-        if (!copilot) copilot = droneDetails.co_pilot_user_id;
-      }
+    if (working_date.length > 62) {
+      return res.status(400).json({ message: "At most 62 working dates can be assigned in one request" });
     }
+    const reply = (status, body) => ({ status, body });
 
-    const sortedDates = [...working_date]
-      .map((d) => {
-        const dt = new Date(d);
-        dt.setUTCHours(0, 0, 0, 0);
-        return dt;
-      })
-      .sort((a, b) => a - b);
+    const outcome = await db.sequelize.transaction(async (t) => {
+      const order = await SprayingOrder.findOne({ where: { booking_id }, transaction: t, lock: t.LOCK.UPDATE });
+      if (!order) return reply(404, { message: "Booking not found" });
 
-    const results = [];
-
-    for (const date of sortedDates) {
-      const existing = await SprayingDailyLogs.findOne({
-        where: { spraying_work_id: booking_id, working_date: date },
-      });
-
-      if (existing) {
-        await existing.update({
-          drone_id: drone_id,
-          pilot_user_id: pilot ?? existing.pilot_user_id,
-          co_pilot_user_id: copilot ?? existing.co_pilot_user_id,
-          modified_on: new Date(),
+      const closedStatuses = [
+        OrderStatusEnum.ORDER_CANCELLED,
+        OrderStatusEnum.ORDER_REJECTED,
+        OrderStatusEnum.ORDER_COMPLETED,
+        OrderStatusEnum.WAITING_FOR_PAYMENT,
+        OrderStatusEnum.PAYMENT_SUCCESSFUL,
+      ];
+      if (closedStatuses.includes(order.order_status)) {
+        return reply(409, {
+          message: `Work cannot be assigned to a booking in status ${order.order_status}`,
         });
-        results.push({ date: toYMD(date), action: "updated" });
+      }
+
+      const droneDetails = await Drone1.findByPk(drone_id, { transaction: t });
+      if (!droneDetails) return reply(404, { message: "Drone not found" });
+
+      // Fallback: if pilot or copilot is not provided, take them from the drone's crew
+      if (!pilot) pilot = droneDetails.pilot_user_id;
+      if (!copilot) copilot = droneDetails.co_pilot_user_id;
+      if (!pilot) {
+        return reply(400, {
+          message: "This drone has no pilot assigned. Attach a pilot to the drone or pass `pilot`.",
+        });
+      }
+
+      const pilotUser = await User.findByPk(pilot, { attributes: ["id", "is_active"], transaction: t });
+      if (!pilotUser || pilotUser.is_active === false) {
+        return reply(400, { message: "The selected pilot does not exist or is deactivated." });
+      }
+
+      // Normalise dates -> unique UTC-midnight calendar dates, sorted
+      const parsed = working_date.map((d) => ({ raw: d, date: parseDateOnly(d) }));
+      const badDate = parsed.find((x) => !x.date);
+      if (badDate) {
+        return reply(400, {
+          message: `Invalid working_date: ${JSON.stringify(badDate.raw)}. Use YYYY-MM-DD.`,
+        });
+      }
+      const uniqueByYmd = new Map(parsed.map((x) => [toYMD(x.date), x.date]));
+      const sortedDates = [...uniqueByYmd.values()].sort((a, b) => a - b);
+
+      // Two admins assigning the same drone or pilot to different bookings at the same moment would both see it as
+      // free. These locks make the second wait until the first has committed, then see the clash below.
+      await lockKeys(db.sequelize, t, sortedDates.flatMap((d) => [`drone:${drone_id}:${toYMD(d)}`, `pilot:${pilot}:${toYMD(d)}`]));
+
+      // Existing logs of THIS booking for those dates
+      const existingLogs = await SprayingDailyLogs.findAll({
+        where: { spraying_work_id: booking_id, working_date: { [Op.in]: sortedDates } },
+        transaction: t,
+      });
+      const existingByYmd = new Map(existingLogs.map((l) => [toYMD(l.working_date), l]));
+
+      // No scheduling into the past (dates already on this booking are allowed through)
+      const today = todayIST();
+      const pastDates = sortedDates
+        .map(toYMD)
+        .filter((ymd) => ymd < today && !existingByYmd.has(ymd));
+      if (pastDates.length > 0) {
+        return reply(400, {
+          message: `Cannot schedule work on past dates: ${pastDates.join(", ")}`,
+          past_dates: pastDates,
+        });
+      }
+
+      // Conflict check: same drone or same pilot already booked for another order on those dates
+      const conflicts = await SprayingDailyLogs.findAll({
+        where: {
+          spraying_work_id: { [Op.ne]: booking_id },
+          working_date: { [Op.in]: sortedDates },
+          is_active: true,
+          [Op.or]: [{ drone_id }, { pilot_user_id: pilot }],
+        },
+        attributes: ["working_date", "drone_id", "pilot_user_id", "spraying_work_id"],
+        raw: true,
+        transaction: t,
+      });
+      if (conflicts.length > 0) {
+        return reply(409, {
+          message: "Drone or pilot is already booked on some of these dates",
+          conflicts: conflicts.map((c) => ({
+            date: toYMD(c.working_date),
+            reason: c.drone_id === Number(drone_id) ? "drone_busy" : "pilot_busy",
+            other_booking_id: c.spraying_work_id,
+          })),
+        });
+      }
+
+      const results = [];
+      for (const date of sortedDates) {
+        const ymd = toYMD(date);
+        const existing = existingByYmd.get(ymd);
+
+        if (existing) {
+          // A day the pilot already started/finished is frozen
+          if (["started", "completed"].includes(getDayStatus(existing))) {
+            results.push({ date: ymd, action: "locked", reason: `day already ${getDayStatus(existing)}` });
+            continue;
+          }
+
+          // A different pilot must confirm; so must the same pilot again if they had declined the day
+          // (assigning a declined day is a fresh request)
+          const pilotChanged = existing.pilot_user_id !== Number(pilot);
+          const wasDeclined = getDayStatus(existing) === "declined";
+          await existing.update({
+            drone_id,
+            pilot_user_id: pilot,
+            co_pilot_user_id: copilot ?? existing.co_pilot_user_id,
+            is_active: true,
+            ...((pilotChanged || wasDeclined) && { is_pilot_confirmed: null, pilot_confirmed_at: null }),
+            ...(readDayData(existing).declined_at && {
+              verification_comment: JSON.stringify(stripDecline(readDayData(existing))),
+            }),
+            modified_on: new Date(),
+          }, { transaction: t });
+          results.push({ date: ymd, action: "updated" });
+        } else {
+          await SprayingDailyLogs.create({
+            spraying_work_id: booking_id,
+            drone_id,
+            pilot_user_id: pilot,
+            co_pilot_user_id: copilot || null,
+            working_date: date,
+            created_on: new Date(),
+            is_active: true,
+          }, { transaction: t });
+          results.push({ date: ymd, action: "created" });
+        }
+      }
+
+      // Order dates always reflect ALL scheduled days, not only the ones in this call
+      const allLogs = await SprayingDailyLogs.findAll({
+        where: { spraying_work_id: booking_id, is_active: true },
+        order: [["working_date", "ASC"]],
+        transaction: t,
+      });
+      if (allLogs.length > 0) {
+        await order.update({
+          start_date: allLogs[0].working_date,
+          end_date: allLogs[allLogs.length - 1].working_date,
+          num_of_days: allLogs.length,
+        }, { transaction: t });
+      }
+
+      // Assignee row (confirmation flag derives from the logs, never blindly reset)
+      const pilotLogs = allLogs.filter((l) => l.pilot_user_id === Number(pilot));
+      const existingAssignee =
+        (await SprayingWorkAssignee.findOne({ where: { booking_id, pilot_user_id: pilot }, transaction: t })) ||
+        (await SprayingWorkAssignee.findOne({ where: { booking_id }, transaction: t }));
+      const assigneePayload = {
+        booking_id,
+        drone_id: drone_id || null,
+        pilot_user_id: pilot,
+        co_pilot_user_id: copilot || null,
+        is_pilot_confirm: pilotLogs.some((l) => l.is_pilot_confirmed === true),
+      };
+      if (existingAssignee) {
+        await existingAssignee.update({
+          ...assigneePayload,
+          ...(existingAssignee.pilot_user_id !== Number(pilot) && { is_copilot_confirm: false }),
+          modified_on: new Date(),
+        }, { transaction: t });
       } else {
-        await SprayingDailyLogs.create({
-          spraying_work_id: booking_id,
-          drone_id: drone_id,
-          pilot_user_id: pilot || null,
-          co_pilot_user_id: copilot || null,
-          working_date: date,
+        await SprayingWorkAssignee.create({
+          ...assigneePayload,
+          is_copilot_confirm: false,
           created_on: new Date(),
           is_active: true,
-        });
-        results.push({ date: toYMD(date), action: "created" });
+        }, { transaction: t });
       }
-    }
 
-    const order = await SprayingOrder.findOne({ where: { booking_id } });
-    if (order) {
-      const earliest = sortedDates[0];
-      const latest = sortedDates[sortedDates.length - 1];
-      await order.update({
-        end_date: latest,
-        num_of_days: sortedDates.length,
-        ...(new Date(order.start_date) > earliest && {
-          start_date: earliest,
-        }),
+      // New/changed days need the pilot's confirmation again
+      const needsConfirmation = allLogs.some((l) => l.is_pilot_confirmed !== true);
+      if (
+        needsConfirmation &&
+        [OrderStatusEnum.ORDER_ACCEPTED, OrderStatusEnum.ORDER_STARTED].includes(order.order_status)
+      ) {
+        await updateOrderStatus(
+          booking_id,
+          OrderStatusEnum.WAITING_FOR_CONFIRMATION,
+          "Work schedule changed - waiting for pilot confirmation",
+          req.auth?.id ?? null,
+          t
+        );
+      }
+
+
+      return reply(200, {
+        message: "Work assigned successfully",
+        result: results,
+        pilot_user_id: Number(pilot),
+        co_pilot_user_id: copilot ? Number(copilot) : null,
+        drone_id: Number(drone_id),
+        start_date: allLogs.length ? toYMD(allLogs[0].working_date) : null,
+        end_date: allLogs.length ? toYMD(allLogs[allLogs.length - 1].working_date) : null,
+        num_of_days: allLogs.length,
       });
-    }
-
-    const existingAssignee = await SprayingWorkAssignee.findOne({
-      where: { booking_id },
     });
-    const assigneePayload = {
-      booking_id,
-      drone_id: drone_id || null,
-      pilot_user_id: pilot || null,
-      co_pilot_user_id: copilot || null,
-      is_pilot_confirm: false,
-      is_copilot_confirm: false,
-    };
-    if (existingAssignee) {
-      await existingAssignee.update({
-        ...assigneePayload,
-        modified_on: new Date(),
-      });
-    } else {
-      await SprayingWorkAssignee.create({
-        ...assigneePayload,
-        created_on: new Date(),
-        is_active: true,
-      });
-    }
-
-    return res.status(200).json({
-      message: "Work assigned successfully",
-      result: results,
-    });
+    return res.status(outcome.status).json(outcome.body);
   } catch (error) {
-    console.error("Error in assignWork:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "assignWork");
   }
 };
 
@@ -496,10 +619,38 @@ export const updateDailyLogDrone = async (req, res) => {
     });
     if (!drone) return res.status(404).json({ message: "Drone not found" });
 
+    if (["started", "completed"].includes(getDayStatus(log))) {
+      return res.status(409).json({
+        message: `This working day is already ${getDayStatus(log)}; the drone cannot be changed.`,
+      });
+    }
+
+    const newPilot = drone.pilot_user_id ?? log.pilot_user_id;
+    const clash = await SprayingDailyLogs.findOne({
+      where: {
+        id: { [Op.ne]: log.id },
+        working_date: log.working_date,
+        is_active: true,
+        [Op.or]: [{ drone_id }, ...(newPilot ? [{ pilot_user_id: newPilot }] : [])],
+      },
+      attributes: ["id"],
+      raw: true,
+    });
+    if (clash) {
+      return res.status(409).json({
+        message: "That drone or its pilot is already booked on this date",
+      });
+    }
+
+    const pilotChanged = newPilot !== log.pilot_user_id;
     await log.update({
       drone_id,
-      pilot_user_id: drone.pilot_user_id ?? log.pilot_user_id,
+      pilot_user_id: newPilot,
       co_pilot_user_id: drone.co_pilot_user_id ?? log.co_pilot_user_id,
+      ...(pilotChanged && { is_pilot_confirmed: null, pilot_confirmed_at: null }),
+      ...(pilotChanged && readDayData(log).declined_at && {
+        verification_comment: JSON.stringify(stripDecline(readDayData(log))),
+      }),
       modified_on: new Date(),
     });
 
@@ -553,64 +704,80 @@ export const deleteDailyLog = async (req, res) => {
     const { log_id } = req.params;
     const { force = false } = req.body || {};
 
-    if (!log_id) {
+    if (!Number.isInteger(Number(log_id))) {
       return res.status(400).json({ message: "log_id is required" });
     }
 
-    const log = await SprayingDailyLogs.findOne({ where: { id: log_id } });
-    if (!log) return res.status(404).json({ message: "Daily log not found" });
+    const outcome = await db.sequelize.transaction(async (t) => {
+      const log = await SprayingDailyLogs.findByPk(log_id, { transaction: t, lock: t.LOCK.UPDATE });
+      if (!log) return { status: 404, body: { message: "Daily log not found" } };
 
-    /* Block deletion of verified logs unless admin forces it */
-    if (log.is_verified && !force) {
-      return res.status(409).json({
-        message: "This log has already been verified by the pilot. Pass force=true to delete anyway.",
-        is_verified: true,
-      });
-    }
-
-    const booking_id = log.spraying_work_id;
-    const deletedDate = toYMD(new Date(log.working_date));
-
-    /* Hard-delete the log row */
-    await log.destroy();
-
-    /* Recalculate order dates from remaining logs */
-    const remainingLogs = await SprayingDailyLogs.findAll({
-      where: { spraying_work_id: booking_id, is_active: true },
-      attributes: ["working_date"],
-      order: [["working_date", "ASC"]],
-      raw: true,
-    });
-
-    const order = await SprayingOrder.findOne({ where: { booking_id } });
-    if (order) {
-      if (remainingLogs.length === 0) {
-        /* All logs removed — reset counts but keep start_date */
-        await order.update({
-          num_of_days: 0,
-          end_date: null,
-        });
-      } else {
-        const earliest = remainingLogs[0].working_date;
-        const latest = remainingLogs[remainingLogs.length - 1].working_date;
-        await order.update({
-          num_of_days: remainingLogs.length,
-          start_date: earliest,
-          end_date: latest,
-        });
+      // A day the pilot is working on right now is never removed: it would delete the work in progress
+      const dayStatus = getDayStatus(log);
+      if (dayStatus === "started") {
+        return { status: 409, body: { message: "This working day is in progress. Wait for the pilot to end it." } };
       }
-    }
 
-    return res.status(200).json({
-      message: "Daily log deleted successfully",
-      log_id: Number(log_id),
-      deleted_date: deletedDate,
-      booking_id,
-      remaining_days: remainingLogs.length,
+      /* A finished day is the record of work done (and of what is owed): only with force=true */
+      if ((log.is_verified || dayStatus === "completed") && !force) {
+        return {
+          status: 409,
+          body: {
+            message: "This working day has already been completed by the pilot. Pass force=true to delete it anyway.",
+            is_verified: log.is_verified === true,
+          },
+        };
+      }
+
+      const booking_id = log.spraying_work_id;
+      const deletedDate = toYMD(new Date(log.working_date));
+      await log.destroy({ transaction: t });
+
+      /* Recalculate order dates from remaining logs */
+      const remainingLogs = await SprayingDailyLogs.findAll({
+        where: { spraying_work_id: booking_id, is_active: true },
+        attributes: ["working_date"],
+        order: [["working_date", "ASC"]],
+        raw: true,
+        transaction: t,
+      });
+
+      const order = await SprayingOrder.findOne({ where: { booking_id }, transaction: t, lock: t.LOCK.UPDATE });
+      if (order) {
+        if (remainingLogs.length === 0) {
+          /* All logs removed — reset counts but keep start_date */
+          await order.update({ num_of_days: 0, end_date: null }, { transaction: t });
+        } else {
+          await order.update({
+            num_of_days: remainingLogs.length,
+            start_date: remainingLogs[0].working_date,
+            end_date: remainingLogs[remainingLogs.length - 1].working_date,
+          }, { transaction: t });
+        }
+
+        await db.SprayingOrderTimeline.create({
+          booking_id,
+          order_status: order.order_status,
+          remarks: `Working day ${deletedDate} removed by admin${force && dayStatus === "completed" ? " (it had been completed)" : ""}`,
+          created_by: req.auth?.id ?? null,
+        }, { transaction: t });
+      }
+
+      return {
+        status: 200,
+        body: {
+          message: "Daily log deleted successfully",
+          log_id: Number(log_id),
+          deleted_date: deletedDate,
+          booking_id,
+          remaining_days: remainingLogs.length,
+        },
+      };
     });
+
+    return res.status(outcome.status).json(outcome.body);
   } catch (error) {
-    console.error("Error in deleteDailyLog:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "deleteDailyLog");
   }
 };
 

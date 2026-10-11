@@ -1,6 +1,9 @@
 import { Op } from 'sequelize';
 import db from '../models/index.js';
 import { OrderStatusEnum } from '../utils/enums.js';
+import { updateOrderStatus } from '../utils/orderUtils.js';
+import { respondWithError } from '../middleware/errorHandler.js';
+import { toYMD, readDayData, getDayStatus } from '../utils/dateUtils.js';
 
 const {
   SprayingOrder,
@@ -132,15 +135,27 @@ const buildTimeline = (timelineRows) => {
 const buildPilotObject = async (assignee, extras) => {
   if (!assignee) return null;
 
-  const [profile, user, drone] = await Promise.all([
+  const [profile, user, drone, coProfile, coUser] = await Promise.all([
     UserProfile.findOne({ where: { user_id: assignee.pilot_user_id } }),
     User.findOne({ where: { id: assignee.pilot_user_id } }),
     assignee.drone_id ? Drone1.findOne({ where: { id: assignee.drone_id } }) : Promise.resolve(null),
+    assignee.co_pilot_user_id ? UserProfile.findOne({ where: { user_id: assignee.co_pilot_user_id } }) : Promise.resolve(null),
+    assignee.co_pilot_user_id ? User.findOne({ where: { id: assignee.co_pilot_user_id } }) : Promise.resolve(null),
   ]);
 
   const name = profile
     ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim()
     : `Pilot #${assignee.pilot_user_id}`;
+
+  const coPilot = assignee.co_pilot_user_id && coUser
+    ? {
+        pilot_id: assignee.co_pilot_user_id,
+        name: coProfile
+          ? `${coProfile.first_name || ''} ${coProfile.last_name || ''}`.trim()
+          : `Co-pilot #${assignee.co_pilot_user_id}`,
+        phone_number: coUser.mobile_number || null,
+      }
+    : null;
 
   return {
     pilot_id: assignee.pilot_user_id,
@@ -149,7 +164,10 @@ const buildPilotObject = async (assignee, extras) => {
     rating: extras?.pilot_rating ?? null,
     review_count: extras?.pilot_review_count ?? null,
     experience_years: extras?.pilot_experience_years ?? null,
+    drone_id: assignee.drone_id || null,
     drone_name: drone?.name || drone?.model || null,
+    drone_model: drone?.model || null,
+    co_pilot: coPilot,
     eta_minutes: extras?.pilot_eta_minutes ?? null,
     distance_km: extras?.pilot_distance_km ?? null,
   };
@@ -159,6 +177,13 @@ const buildPilotObject = async (assignee, extras) => {
 //  HELPER: aggregate usage stats for COMPLETED jobs.
 //  Priority: explicit extras.usage_* columns → fallback: parse daily logs JSON
 // ─────────────────────────────────────────────────────────────────────────────
+// A work value is a number ("40") when entered by hand, or free text ("Urea 50 Bottle (1 L)") when the pilot app
+// lists products. Anything that is not a plain number counts as 0 in totals, never NaN.
+const toNumber = (v) => {
+  const n = parseFloat(v);
+  return Number.isFinite(n) && /^\s*\d+(\.\d+)?\s*$/.test(String(v)) ? n : 0;
+};
+
 const buildUsage = (dailyLogs, totalAcres, extras) => {
   // ── Prefer explicit columns set by admin/pilot ──────────────────
   if (extras?.usage_total_acres_covered != null) {
@@ -175,20 +200,18 @@ const buildUsage = (dailyLogs, totalAcres, extras) => {
     };
   }
 
-  // ── Fallback: aggregate from SprayingDailyLogs.verification_comment ──
+  // ── Fallback: aggregate from the pilot's day logs ──
   let totalCoveredAcres = 0;
   let totalFertilizer = 0;
   let totalPesticide = 0;
   let totalWater = 0;
 
   for (const log of dailyLogs) {
-    try {
-      const data = log.verification_comment ? JSON.parse(log.verification_comment) : {};
-      totalCoveredAcres += parseFloat(data.completed_acres || 0);
-      totalFertilizer   += parseFloat(data.fertilizer_used || 0);
-      totalPesticide    += parseFloat(data.pesticide_used  || 0);
-      totalWater        += parseFloat(data.water_used      || 0);
-    } catch { /* malformed JSON — skip */ }
+    const data = readDayData(log);
+    totalCoveredAcres += toNumber(data.completed_acres);
+    totalFertilizer   += toNumber(data.fertilizer_used);
+    totalPesticide    += toNumber(data.pesticide_used);
+    totalWater        += toNumber(data.water_used);
   }
 
   const coverage = totalAcres > 0
@@ -211,19 +234,58 @@ const buildDailyWorkLogs = (dailyLogs) => {
   return dailyLogs
     .filter(log => log.working_date)
     .map((log, idx) => {
-      let completed_acres = 0;
-      try {
-        const data = log.verification_comment ? JSON.parse(log.verification_comment) : {};
-        completed_acres = parseFloat(data.completed_acres || 0);
-      } catch { /* skip */ }
-
+      const data = readDayData(log);
+      const text = (v) => (v === undefined || v === null || v === '' ? null : String(v));
       return {
         day_number:       idx + 1,
         date:             fmtDate(log.working_date),
-        acres_completed:  completed_acres,
+        date_ymd:         toYMD(log.working_date),
+        day_status:       getDayStatus(log),
+        acres_completed:  toNumber(data.completed_acres),
+        started_at:       data.started_at ? fmtDateTime(data.started_at) : null,
+        ended_at:         data.day_status === 'completed' && data.saved_at ? fmtDateTime(data.saved_at) : null,
+        // what was used that day: exact text as entered, plus the number when it is one
+        fertilizer_used:  text(data.fertilizer_used),
+        fertilizer_kg:    toNumber(data.fertilizer_used) || null,
+        pesticide_used:   text(data.pesticide_used),
+        pesticide_ltr:    toNumber(data.pesticide_used) || null,
+        water_used:       text(data.water_used),
+        water_ltr:        toNumber(data.water_used) || null,
+        notes:            text(data.notes),
       };
     });
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HELPER: the day-by-day schedule the farmer sees on the booking screen
+//  (every scheduled date, with who/what is assigned and where each day stands)
+// ─────────────────────────────────────────────────────────────────────────────
+const DAY_STATUS_LABEL = {
+  scheduled: 'Scheduled',
+  confirmed: 'Pilot confirmed',
+  started:   'In progress',
+  completed: 'Completed',
+  declined:  'Pilot declined - finding another pilot',
+};
+
+const buildSchedule = (dailyLogs, dronesById) =>
+  dailyLogs
+    .filter(log => log.working_date)
+    .map((log, idx) => {
+      const status = getDayStatus(log);
+      const data = readDayData(log);
+      const drone = log.drone_id ? dronesById[log.drone_id] : null;
+      return {
+        day_number:   idx + 1,
+        date:         fmtDate(log.working_date),
+        date_ymd:     toYMD(log.working_date),
+        status,
+        status_label: DAY_STATUS_LABEL[status],
+        pilot_confirmed: log.is_pilot_confirmed === true,
+        drone_name:   drone ? (drone.name || drone.model || null) : null,
+        acres_completed: toNumber(data.completed_acres),
+      };
+    });
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELPER: build the full booking detail response object
@@ -255,7 +317,7 @@ const buildFullDetail = async (order) => {
     }),
     SprayingOrderExtras.findOne({ where: { booking_id: bookingId } }),
     SprayingDailyLogs.findAll({
-      where: { spraying_work_id: bookingId },
+      where: { spraying_work_id: bookingId, is_active: true },
       order: [['working_date', 'ASC']],
     }),
     order.crop_type_id
@@ -313,6 +375,28 @@ const buildFullDetail = async (order) => {
   // Daily work logs
   const daily_work_logs = buildDailyWorkLogs(dailyLogs);
 
+  // Day-by-day schedule (drone names resolved in one query)
+  const droneIds = [...new Set(dailyLogs.map(l => l.drone_id).filter(Boolean))];
+  const droneRows = droneIds.length ? await Drone1.findAll({ where: { id: droneIds } }) : [];
+  const dronesById = Object.fromEntries(droneRows.map(d => [d.id, d]));
+  const schedule = buildSchedule(dailyLogs, dronesById);
+
+  const totalDays     = dailyLogs.length || order.num_of_days || 1;
+  const completedDays = dailyLogs.filter(l => getDayStatus(l) === 'completed').length;
+  const startedDays   = dailyLogs.filter(l => getDayStatus(l) === 'started').length;
+  const progress = {
+    total_days:     totalDays,
+    completed_days: completedDays,
+    in_progress_days: startedDays,
+    percentage:     totalDays > 0 ? Math.round((completedDays / totalDays) * 100) : 0,
+  };
+
+  const startYmd = dailyLogs.length ? toYMD(dailyLogs[0].working_date) : (order.start_date ? toYMD(order.start_date) : null);
+  const endYmd   = dailyLogs.length ? toYMD(dailyLogs[dailyLogs.length - 1].working_date) : (order.end_date ? toYMD(order.end_date) : null);
+  const dateRange = startYmd && endYmd
+    ? (startYmd === endYmd ? fmtDate(startYmd) : `${fmtDate(startYmd)} - ${fmtDate(endYmd)}`)
+    : null;
+
   // Formatted amounts
   const totalPrice = parseFloat(extras?.total_payable ?? order.total_price ?? 0);
   const totalAmountFormatted = `₹${totalPrice.toLocaleString('en-IN')}`;
@@ -328,13 +412,20 @@ const buildFullDetail = async (order) => {
   const farmerPhone   = farmerUser?.mobile_number || null;
   const farmerBilling = extras?.farmer_billing_address || null;
 
-  // Scheduled date / time
-  const scheduledDate   = fmtDate(order.start_date);
+  // Scheduled date / time (first scheduled working day wins over the originally requested date)
+  const scheduledDate   = fmtDate(startYmd || order.start_date);
   const scheduledWindow = extras?.scheduled_time || null;
 
   // pilot_assignment_status / drone_assignment_status (PENDING only)
-  const pilotAssignmentStatus = appStatus === 'PENDING' ? 'Searching for Pilot...' : null;
-  const droneAssignmentStatus = appStatus === 'PENDING' ? 'Drone will be assigned soon' : null;
+  // A pilot who declined every day is as good as no pilot: the admin is looking for another one
+  const allDaysDeclined = dailyLogs.length > 0 && dailyLogs.every(l => getDayStatus(l) === 'declined');
+  const hasAssignment = !!(assignee && assignee.pilot_user_id) && !allDaysDeclined;
+  const pilotAssignmentStatus = appStatus === 'PENDING'
+    ? (hasAssignment ? 'Pilot assigned - awaiting pilot confirmation' : 'Searching for Pilot...')
+    : null;
+  const droneAssignmentStatus = appStatus === 'PENDING'
+    ? (hasAssignment && assignee.drone_id ? 'Drone assigned' : 'Drone will be assigned soon')
+    : null;
 
   // live_snapshot (only non-null for ONGOING)
   const liveSnapshot = (appStatus === 'ONGOING' && extras)
@@ -413,9 +504,12 @@ const buildFullDetail = async (order) => {
     scheduled_date:          scheduledDate,
     scheduled_time_window:   scheduledWindow,
     created_at:              fmtDateTime(order.created_on),
-    start_date:              order.start_date,
-    end_date:                order.end_date,
-    num_of_days:             order.num_of_days || 1,
+    start_date:              startYmd || order.start_date,
+    end_date:                endYmd || order.end_date,
+    date_range:              dateRange,
+    num_of_days:             totalDays,
+    progress,
+    schedule,
     location:                locationStr,
     total_price:             totalPrice,
     total_amount_formatted:  totalAmountFormatted,
@@ -450,14 +544,14 @@ const buildFullDetail = async (order) => {
     // ── Timeline ──────────────────────────────────────────────────
     timeline,
 
-    // ── Usage (COMPLETED only — 0s otherwise) ────────────────────
-    usage: appStatus === 'COMPLETED' ? usage : null,
+    // ── Usage (running totals while ONGOING, final when COMPLETED) ──
+    usage: (appStatus === 'COMPLETED' || appStatus === 'ONGOING') ? usage : null,
 
     // ── Live snapshot (ONGOING only) ─────────────────────────────
     live_snapshot: liveSnapshot,
 
-    // ── Daily work logs (COMPLETED only) ─────────────────────────
-    daily_work_logs: appStatus === 'COMPLETED' ? daily_work_logs : null,
+    // ── Daily work logs (ONGOING + COMPLETED) ─────────────────────
+    daily_work_logs: (appStatus === 'COMPLETED' || appStatus === 'ONGOING') ? daily_work_logs : null,
 
     // ── Farmer info (for invoice) ─────────────────────────────────
     farmer: {
@@ -475,32 +569,38 @@ const buildFullDetail = async (order) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  HELPER: retrieve all user IDs associated with this farmer (e.g. by mobile number)
-//  Guarantees farmer sees all bookings associated with their account/phone number
-//  while strictly preventing access to any other farmer's bookings.
+//  Which bookings belong to the farmer: the ones booked for them (user_id) or by them (created_by).
+//
+//  This used to also include every account whose mobile number merely ENDED with the farmer's 10 digits. Mobile
+//  numbers were not unique and could be changed without proof, so any farmer could see, cancel and reschedule
+//  other people's bookings (on the dev database ~15 accounts could see one farmer's orders this way).
 // ─────────────────────────────────────────────────────────────────────────────
-const getFarmerUserIds = async (farmer_user_id) => {
-  const ids = [farmer_user_id];
-  try {
-    const farmerUser = await User.findByPk(farmer_user_id);
-    if (farmerUser?.mobile_number) {
-      const cleanMobile = farmerUser.mobile_number.toString().replace(/\D/g, '').slice(-10);
-      if (cleanMobile) {
-        const matched = await User.findAll({
-          where: {
-            mobile_number: { [Op.like]: `%${cleanMobile}` },
-          },
-          attributes: ['id'],
-        });
-        matched.forEach((u) => {
-          if (!ids.includes(u.id)) ids.push(u.id);
-        });
-      }
-    }
-  } catch (err) {
-    console.error('getFarmerUserIds error:', err);
-  }
-  return ids;
+const ownedBy = (farmerUserId) => ({
+  [Op.or]: [{ user_id: farmerUserId }, { created_by: farmerUserId }],
+});
+
+const findOwnBooking = (booking_id, farmerUserId) =>
+  SprayingOrder.findOne({ where: { booking_id, ...ownedBy(farmerUserId) } });
+
+const STATUS_GROUPS = {
+  PENDING:   [OrderStatusEnum.ORDER_PLACED, OrderStatusEnum.WAITING_FOR_CONFIRMATION],
+  UPCOMING:  [OrderStatusEnum.ORDER_ACCEPTED, OrderStatusEnum.ORDER_STARTED],
+  ONGOING:   [OrderStatusEnum.JOB_STARTED, OrderStatusEnum.JOB_ENDED],
+  COMPLETED: [OrderStatusEnum.ORDER_COMPLETED, OrderStatusEnum.WAITING_FOR_PAYMENT, OrderStatusEnum.PAYMENT_SUCCESSFUL],
+  CANCELLED: [OrderStatusEnum.ORDER_CANCELLED, OrderStatusEnum.ORDER_REJECTED],
+};
+STATUS_GROUPS.ORDER_COMPLETED = STATUS_GROUPS.COMPLETED;
+
+/** rows -> { [row[key]]: row }, keeping the first row per key (callers sort so the first is the one wanted). */
+const indexBy = (rows, key) => {
+  const map = new Map();
+  for (const row of rows) if (!map.has(row[key])) map.set(row[key], row);
+  return map;
+};
+const groupBy = (rows, key) => {
+  const map = new Map();
+  for (const row of rows) (map.get(row[key]) || map.set(row[key], []).get(row[key])).push(row);
+  return map;
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -509,6 +609,9 @@ const getFarmerUserIds = async (farmer_user_id) => {
 //  Returns a paginated list of bookings for the authenticated farmer.
 //  `status` must be one of: PENDING | UPCOMING | ONGOING | COMPLETED | CANCELLED
 //  Card-level fields only (enough to render the list adapter).
+//
+//  The related rows are loaded for the whole page at once (a fixed ~9 queries per page): it used to be ~8 queries
+//  PER booking, with no upper limit on `limit`.
 // ═════════════════════════════════════════════════════════════════════════════
 export const getFarmerBookings = async (req, res) => {
   try {
@@ -517,31 +620,12 @@ export const getFarmerBookings = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
-    const { status } = req.query;
-    const page  = Math.max(1, parseInt(req.query.page)  || 1);
-    const limit = Math.max(1, parseInt(req.query.limit) || 10);
+    const { status, page, limit } = req.valid.query;   // limit is capped at 50 (validation/farmer.schemas.js)
     const offset = (page - 1) * limit;
 
-    const statusMap = {
-      PENDING:   [OrderStatusEnum.ORDER_PLACED, OrderStatusEnum.WAITING_FOR_CONFIRMATION],
-      UPCOMING:  [OrderStatusEnum.ORDER_ACCEPTED, OrderStatusEnum.ORDER_STARTED],
-      ONGOING:   [OrderStatusEnum.JOB_STARTED, OrderStatusEnum.JOB_ENDED],
-      COMPLETED: [OrderStatusEnum.ORDER_COMPLETED, OrderStatusEnum.WAITING_FOR_PAYMENT, OrderStatusEnum.PAYMENT_SUCCESSFUL],
-      ORDER_COMPLETED: [OrderStatusEnum.ORDER_COMPLETED, OrderStatusEnum.WAITING_FOR_PAYMENT, OrderStatusEnum.PAYMENT_SUCCESSFUL],
-      CANCELLED: [OrderStatusEnum.ORDER_CANCELLED, OrderStatusEnum.ORDER_REJECTED],
-    };
-
-    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
-
-    const whereClause = {
-      [Op.or]: [
-        { user_id: { [Op.in]: farmerUserIds } },
-        { created_by: { [Op.in]: farmerUserIds } },
-      ],
-    };
-
-    if (status && statusMap[status.toUpperCase()]) {
-      whereClause.order_status = { [Op.in]: statusMap[status.toUpperCase()] };
+    const whereClause = ownedBy(farmer_user_id);
+    if (status && STATUS_GROUPS[status]) {
+      whereClause.order_status = { [Op.in]: STATUS_GROUPS[status] };
     }
 
     const { count, rows: orders } = await SprayingOrder.findAndCountAll({
@@ -551,84 +635,128 @@ export const getFarmerBookings = async (req, res) => {
       offset,
     });
 
-    const cards = await Promise.all(
-      orders.map(async (order) => {
-        const bookingId = order.booking_id;
-        const appStatus = toAppStatus(order.order_status);
+    const bookingIds = orders.map((o) => o.booking_id);
+    const cropIds = [...new Set(orders.map((o) => o.crop_type_id).filter(Boolean))];
+    const none = Promise.resolve([]);
 
-        // Parallel fetch of only what's needed for the list card
-        const [extras, assignee, address, crop] = await Promise.all([
-          SprayingOrderExtras.findOne({ where: { booking_id: bookingId } }),
-          SprayingWorkAssignee.findOne({
-            where: { booking_id: bookingId },
+    const [extrasRows, assigneeRows, addressRows, cropRows, logRows, timelineRows] = bookingIds.length
+      ? await Promise.all([
+          SprayingOrderExtras.findAll({ where: { booking_id: bookingIds } }),
+          SprayingWorkAssignee.findAll({ where: { booking_id: bookingIds }, order: [['created_on', 'DESC']] }),
+          SprayingOrderAddress.findAll({ where: { order_id: bookingIds }, order: [['id', 'ASC']] }),
+          cropIds.length ? MasterCrop.findAll({ where: { id: cropIds } }) : none,
+          SprayingDailyLogs.findAll({
+            where: { spraying_work_id: bookingIds, is_active: true },
+            attributes: ['id', 'spraying_work_id', 'working_date', 'verification_comment', 'is_pilot_confirmed'],
+            order: [['working_date', 'ASC']],
+          }),
+          SprayingOrderTimeline.findAll({
+            where: { booking_id: bookingIds },
+            attributes: ['booking_id', 'created_on'],
             order: [['created_on', 'DESC']],
           }),
-          SprayingOrderAddress.findOne({ where: { order_id: bookingId } }),
-          order.crop_type_id
-            ? MasterCrop.findOne({ where: { id: order.crop_type_id } })
-            : Promise.resolve(null),
-        ]);
+        ])
+      : [[], [], [], [], [], []];
 
-        // Pilot name
-        let pilotName = 'To be assigned';
-        let droneName = null;
-        if (assignee?.pilot_user_id) {
-          const pProfile = await UserProfile.findOne({ where: { user_id: assignee.pilot_user_id } });
-          pilotName = pProfile
-            ? `${pProfile.first_name || ''} ${pProfile.last_name || ''}`.trim()
-            : `Pilot #${assignee.pilot_user_id}`;
+    const extrasById = indexBy(extrasRows, 'booking_id');
+    const assigneeById = indexBy(assigneeRows, 'booking_id');      // newest first -> latest assignee
+    const addressById = indexBy(addressRows, 'order_id');
+    const cropById = indexBy(cropRows, 'id');
+    const logsById = groupBy(logRows, 'spraying_work_id');
+    const lastEventById = indexBy(timelineRows, 'booking_id');      // newest first -> last status change
 
-          if (assignee.drone_id) {
-            const drone = await Drone1.findOne({ where: { id: assignee.drone_id } });
-            droneName = drone?.name || drone?.model || null;
-          }
+    const pilotIds = [...new Set([...assigneeById.values()].map((a) => a.pilot_user_id).filter(Boolean))];
+    const droneIds = [...new Set([...assigneeById.values()].filter((a) => a.pilot_user_id && a.drone_id).map((a) => a.drone_id))];
+    const [pilotProfiles, drones] = await Promise.all([
+      pilotIds.length ? UserProfile.findAll({ where: { user_id: pilotIds } }) : none,
+      droneIds.length ? Drone1.findAll({ where: { id: droneIds } }) : none,
+    ]);
+    const profileByUser = indexBy(pilotProfiles, 'user_id');
+    const droneById = indexBy(drones, 'id');
+
+    const cards = orders.map((order) => {
+      const bookingId = order.booking_id;
+      const appStatus = toAppStatus(order.order_status);
+      const extras = extrasById.get(bookingId);
+      const assignee = assigneeById.get(bookingId);
+      const address = addressById.get(bookingId);
+      const crop = cropById.get(order.crop_type_id);
+      const cardLogs = logsById.get(bookingId) || [];
+      const lastEvent = lastEventById.get(bookingId);
+
+      const cardStart = cardLogs.length ? toYMD(cardLogs[0].working_date) : (order.start_date ? toYMD(order.start_date) : null);
+      const cardEnd   = cardLogs.length ? toYMD(cardLogs[cardLogs.length - 1].working_date) : (order.end_date ? toYMD(order.end_date) : null);
+      const cardTotal = cardLogs.length || order.num_of_days || 1;
+      const cardDone  = cardLogs.filter(l => getDayStatus(l) === 'completed').length;
+
+      // Pilot name
+      let pilotName = 'To be assigned';
+      let droneName = null;
+      if (assignee?.pilot_user_id) {
+        const pProfile = profileByUser.get(assignee.pilot_user_id);
+        pilotName = pProfile
+          ? `${pProfile.first_name || ''} ${pProfile.last_name || ''}`.trim()
+          : `Pilot #${assignee.pilot_user_id}`;
+
+        if (assignee.drone_id) {
+          const drone = droneById.get(assignee.drone_id);
+          droneName = drone?.name || drone?.model || null;
         }
+      }
 
-        // Location string
-        let locationStr = null;
-        if (address) {
-          const village = address.village || address.address1 || 'Field';
-          locationStr = `${village} • ${order.land_in_acers || 0} Acres`;
-        }
+      // Location string
+      let locationStr = null;
+      if (address) {
+        const village = address.village || address.address1 || 'Field';
+        locationStr = `${village} • ${order.land_in_acers || 0} Acres`;
+      }
 
-        const totalPrice = parseFloat(extras?.total_payable ?? order.total_price ?? 0);
-        const cropName   = crop?.name || 'Spraying';
+      const totalPrice = parseFloat(extras?.total_payable ?? order.total_price ?? 0);
+      const cropName   = crop?.name || 'Spraying';
 
-        return {
-          id:                    bookingId,
-          booking_id:            bookingId,
-          title:                 extras?.service_title || `${cropName} Spraying`,
-          crop_name:             cropName,
-          crop_type_id:          order.crop_type_id,
-          status:                appStatus,
-          order_status:          order.order_status,
-          scheduled_date:        fmtDate(order.start_date),
-          scheduled_time_window: extras?.scheduled_time || null,
-          location:              locationStr,
-          total_acres:           order.land_in_acers || 0,
-          land_in_acers:         order.land_in_acers || 0,
-          pilot_name:            pilotName,
-          drone_name:            droneName,
-          total_price:           totalPrice,
-          total_amount_formatted: `₹${totalPrice.toLocaleString('en-IN')}`,
-          is_paid:               order.is_paid || false,
-          payment_status:        order.is_paid ? 'Paid' : 'Pending',
-          booking_otp:           order.booking_otp || null,
-          created_at:            fmtDateTime(order.created_on),
-          start_date:            order.start_date,
-          end_date:              order.end_date,
-          address: address ? {
-            state: address.state,
-            district: address.district,
-            block: address.block,
-            village: address.village,
-            lane1: address.lane1 || address.address1 || null,
-            lane2: address.lane2 || address.address2 || null,
-            pincode: address.pincode || null,
-          } : null,
-        };
-      })
-    );
+      return {
+        id:                    bookingId,
+        booking_id:            bookingId,
+        title:                 extras?.service_title || `${cropName} Spraying`,
+        crop_name:             cropName,
+        crop_type_id:          order.crop_type_id,
+        status:                appStatus,
+        order_status:          order.order_status,
+        scheduled_date:        fmtDate(cardStart || order.start_date),
+        scheduled_time_window: extras?.scheduled_time || null,
+        num_of_days:           cardTotal,
+        progress: {
+          total_days:     cardTotal,
+          completed_days: cardDone,
+          percentage:     cardTotal > 0 ? Math.round((cardDone / cardTotal) * 100) : 0,
+        },
+        location:              locationStr,
+        total_acres:           order.land_in_acers || 0,
+        land_in_acers:         order.land_in_acers || 0,
+        pilot_name:            pilotName,
+        drone_name:            droneName,
+        total_price:           totalPrice,
+        total_amount_formatted: `₹${totalPrice.toLocaleString('en-IN')}`,
+        is_paid:               order.is_paid || false,
+        payment_status:        order.is_paid ? 'Paid' : 'Pending',
+        booking_otp:           order.booking_otp || null,
+        created_at:            fmtDateTime(order.created_on),
+        // when the booking last changed status: shown as "Completed on ..." / "Cancelled on ..."
+        status_updated_at:     fmtDateTime(lastEvent?.created_on),
+        cancellation_reason:   extras?.cancellation_reason ?? null,
+        start_date:            cardStart || order.start_date,
+        end_date:              cardEnd || order.end_date,
+        address: address ? {
+          state: address.state,
+          district: address.district,
+          block: address.block,
+          village: address.village,
+          lane1: address.lane1 || address.address1 || null,
+          lane2: address.lane2 || address.address2 || null,
+          pincode: address.pincode || null,
+        } : null,
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -639,8 +767,7 @@ export const getFarmerBookings = async (req, res) => {
       data: cards,
     });
   } catch (error) {
-    console.error('getFarmerBookings error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getFarmerBookings');
   }
 };
 
@@ -657,23 +784,8 @@ export const getFarmerBookingDetail = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
-    const { booking_id } = req.params;
-    if (!booking_id) {
-      return res.status(400).json({ success: false, message: 'booking_id is required' });
-    }
-
-    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
-
-    const order = await SprayingOrder.findOne({
-      where: {
-        booking_id,
-        [Op.or]: [
-          { user_id: { [Op.in]: farmerUserIds } },
-          { created_by: { [Op.in]: farmerUserIds } },
-        ],
-      },
-    });
-
+    const { booking_id } = req.valid.params;
+    const order = await findOwnBooking(booking_id, farmer_user_id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
@@ -682,8 +794,7 @@ export const getFarmerBookingDetail = async (req, res) => {
 
     return res.status(200).json({ success: true, data: detail });
   } catch (error) {
-    console.error('getFarmerBookingDetail error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getFarmerBookingDetail');
   }
 };
 
@@ -699,27 +810,17 @@ export const rateFarmerBooking = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
-    const { booking_id } = req.params;
-    const { rating } = req.body;
+    const { booking_id } = req.valid.params;
+    const { rating } = req.body;                       // a whole number 1-5 (validation/farmer.schemas.js)
 
-    if (!rating || rating < 1 || rating > 5) {
-      return res.status(400).json({ success: false, message: 'Rating must be between 1 and 5' });
-    }
-
-    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
-
-    const order = await SprayingOrder.findOne({
-      where: {
-        booking_id,
-        [Op.or]: [
-          { user_id: { [Op.in]: farmerUserIds } },
-          { created_by: { [Op.in]: farmerUserIds } },
-        ],
-      },
-    });
-
+    const order = await findOwnBooking(booking_id, farmer_user_id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    // Only work that was actually done can be rated (a farmer can change the rating later)
+    if (!STATUS_GROUPS.COMPLETED.includes(order.order_status)) {
+      return res.status(400).json({ success: false, message: 'Only completed bookings can be rated' });
     }
 
     const [extras] = await SprayingOrderExtras.findOrCreate({
@@ -727,12 +828,11 @@ export const rateFarmerBooking = async (req, res) => {
       defaults: { booking_id },
     });
 
-    await extras.update({ farmer_rating: rating });
+    await extras.update({ farmer_rating: rating, modified_by: farmer_user_id, modified_on: new Date() });
 
     return res.status(200).json({ success: true, message: 'Rating submitted successfully' });
   } catch (error) {
-    console.error('rateFarmerBooking error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'rateFarmerBooking');
   }
 };
 
@@ -744,25 +844,45 @@ export const rateFarmerBooking = async (req, res) => {
 //  and post-job usage stats (usage_total_acres_covered, usage_fertilizer_kg,
 //  usage_pesticide_ltr, usage_water_ltr).
 // ═════════════════════════════════════════════════════════════════════════════
+// Columns an admin may NOT set through this endpoint (identity + audit columns).
+const EXTRAS_PROTECTED = new Set([
+  'booking_id', 'is_active', 'created_on', 'created_by', 'modified_on', 'modified_by', 'createdAt', 'updatedAt',
+]);
+
 export const upsertBookingExtras = async (req, res) => {
   try {
-    const { booking_id } = req.params;
-    if (!booking_id) {
-      return res.status(400).json({ success: false, message: 'booking_id is required' });
-    }
+    const { booking_id } = req.valid.params;
 
-    const order = await SprayingOrder.findByPk(booking_id);
+    const order = await SprayingOrder.findOne({ where: { booking_id } });
     if (!order) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    // Whitelist: only real, editable columns. This also stops a body from overwriting
+    // booking_id and re-pointing the extras row at a different booking.
+    const editable = Object.keys(SprayingOrderExtras.rawAttributes).filter((k) => !EXTRAS_PROTECTED.has(k));
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const unknown = Object.keys(body).filter((k) => !editable.includes(k));
+    if (unknown.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Unknown or protected field(s): ${unknown.join(', ')}`,
+        editable_fields: editable,
+      });
+    }
+    if (Object.keys(body).length === 0) {
+      return res.status(400).json({ success: false, message: 'No fields to update', editable_fields: editable });
+    }
+
+    const audit = { modified_by: req.admin?.id ?? null, modified_on: new Date() };
+
     const [extras, created] = await SprayingOrderExtras.findOrCreate({
       where: { booking_id },
-      defaults: { booking_id, ...req.body },
+      defaults: { booking_id, ...body, created_by: req.admin?.id ?? null },
     });
 
     if (!created) {
-      await extras.update(req.body);
+      await extras.update({ ...body, ...audit });
     }
 
     return res.status(200).json({
@@ -771,8 +891,7 @@ export const upsertBookingExtras = async (req, res) => {
       data: extras,
     });
   } catch (error) {
-    console.error('upsertBookingExtras error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'upsertBookingExtras');
   }
 };
 
@@ -789,20 +908,10 @@ export const cancelFarmerBooking = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
-    const { booking_id } = req.params;
-    const { cancellation_reason } = req.body;
+    const { booking_id } = req.valid.params;
+    const { cancellation_reason } = req.body;          // optional, at most 500 characters
 
-    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
-
-    const order = await SprayingOrder.findOne({
-      where: {
-        booking_id,
-        [Op.or]: [
-          { user_id: { [Op.in]: farmerUserIds } },
-          { created_by: { [Op.in]: farmerUserIds } },
-        ],
-      },
-    });
+    const order = await findOwnBooking(booking_id, farmer_user_id);
 
     if (!order) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
@@ -822,29 +931,39 @@ export const cancelFarmerBooking = async (req, res) => {
       });
     }
 
-    // Update order status
-    await order.update({ order_status: OrderStatusEnum.ORDER_CANCELLED });
+    // Status, timeline, the pilot's days and the reason change together or not at all. The order row is locked and
+    // re-read, so a pilot starting a day at the same moment cannot slip through and resurrect a cancelled booking.
+    const outcome = await db.sequelize.transaction(async (t) => {
+      const locked = await SprayingOrder.findOne({ where: { booking_id }, transaction: t, lock: t.LOCK.UPDATE });
+      if (!locked || !cancellableStatuses.includes(locked.order_status)) {
+        return { notCancellable: true };
+      }
 
-    // Record timeline event
-    await SprayingOrderTimeline.create({
-      booking_id,
-      order_status: OrderStatusEnum.ORDER_CANCELLED,
-      remarks: cancellation_reason || 'Cancelled by farmer',
-      created_by: farmer_user_id,
-      created_on: new Date(),
+      await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_CANCELLED, cancellation_reason || 'Cancelled by farmer', farmer_user_id, t);
+
+      // Release the drone/pilot: cancelled days must not keep blocking the calendar
+      await SprayingDailyLogs.update(
+        { is_active: false, modified_on: new Date() },
+        { where: { spraying_work_id: booking_id }, transaction: t }
+      );
+
+      // Persist cancellation reason in extras
+      const [extras] = await SprayingOrderExtras.findOrCreate({
+        where: { booking_id },
+        defaults: { booking_id },
+        transaction: t,
+      });
+      await extras.update({ cancellation_reason: cancellation_reason || null }, { transaction: t });
+      return { ok: true };
     });
 
-    // Persist cancellation reason in extras
-    const [extras] = await SprayingOrderExtras.findOrCreate({
-      where: { booking_id },
-      defaults: { booking_id },
-    });
-    await extras.update({ cancellation_reason: cancellation_reason || null });
+    if (outcome.notCancellable) {
+      return res.status(409).json({ success: false, message: 'This booking can no longer be cancelled' });
+    }
 
     return res.status(200).json({ success: true, message: 'Booking cancelled successfully' });
   } catch (error) {
-    console.error('cancelFarmerBooking error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'cancelFarmerBooking');
   }
 };
 
@@ -861,30 +980,18 @@ export const rescheduleFarmerBooking = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
-    const { booking_id } = req.params;
-    const { new_date, new_time_window } = req.body;
+    const { booking_id } = req.valid.params;
+    // new_date: a calendar date, today or later in India, at most a year ahead; new_time_window: <= 50 characters
+    const { new_date: newStart, new_time_window } = req.body;
 
-    if (!new_date) {
-      return res.status(400).json({ success: false, message: 'new_date is required' });
-    }
-
-    const farmerUserIds = await getFarmerUserIds(farmer_user_id);
-
-    const order = await SprayingOrder.findOne({
-      where: {
-        booking_id,
-        [Op.or]: [
-          { user_id: { [Op.in]: farmerUserIds } },
-          { created_by: { [Op.in]: farmerUserIds } },
-        ],
-      },
-    });
+    const order = await findOwnBooking(booking_id, farmer_user_id);
 
     if (!order) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
     const reschedulableStatuses = [
+      OrderStatusEnum.WAITING_FOR_CONFIRMATION,
       OrderStatusEnum.ORDER_ACCEPTED,
       OrderStatusEnum.ORDER_STARTED,
     ];
@@ -892,28 +999,78 @@ export const rescheduleFarmerBooking = async (req, res) => {
     if (!reschedulableStatuses.includes(order.order_status)) {
       return res.status(400).json({
         success: false,
-        message: 'Only UPCOMING bookings can be rescheduled',
+        message: 'Only bookings that have not started yet can be rescheduled',
       });
     }
 
-    await order.update({
-      start_date: new Date(new_date),
-      modified_by: farmer_user_id,
-      modified_on: new Date(),
+    // Dates, the cleared schedule, the status and the time window change together or not at all
+    const result = await db.sequelize.transaction(async (t) => {
+      const locked = await SprayingOrder.findOne({ where: { booking_id }, transaction: t, lock: t.LOCK.UPDATE });
+      if (!locked || !reschedulableStatuses.includes(locked.order_status)) {
+        return { error: { status: 409, message: 'Only bookings that have not started yet can be rescheduled' } };
+      }
+
+      const logs = await SprayingDailyLogs.findAll({ where: { spraying_work_id: booking_id, is_active: true }, transaction: t });
+      if (logs.some((l) => ['started', 'completed'].includes(getDayStatus(l)))) {
+        return { error: { status: 400, message: 'Work has already started on this booking and cannot be rescheduled' } };
+      }
+
+      // New window keeps the same number of working days
+      const days = Math.max(1, locked.num_of_days || logs.length || 1);
+      const newEnd = new Date(newStart);
+      newEnd.setUTCDate(newEnd.getUTCDate() + days - 1);
+
+      await locked.update({
+        start_date: newStart,
+        end_date: newEnd,
+        modified_by: farmer_user_id,
+        modified_on: new Date(),
+      }, { transaction: t });
+
+      // The admin-assigned days no longer match the new dates: clear them so the
+      // admin re-assigns, and send the booking back for confirmation.
+      if (logs.length > 0) {
+        await SprayingDailyLogs.destroy({ where: { spraying_work_id: booking_id }, transaction: t });
+        await SprayingWorkAssignee.destroy({ where: { booking_id }, transaction: t });
+      }
+      if (locked.order_status !== OrderStatusEnum.WAITING_FOR_CONFIRMATION) {
+        await updateOrderStatus(
+          booking_id,
+          OrderStatusEnum.WAITING_FOR_CONFIRMATION,
+          `Rescheduled by farmer to ${toYMD(newStart)} - drone and pilot need to be assigned again`,
+          farmer_user_id,
+          t
+        );
+      }
+
+      if (new_time_window) {
+        const [extras] = await SprayingOrderExtras.findOrCreate({
+          where: { booking_id },
+          defaults: { booking_id },
+          transaction: t,
+        });
+        await extras.update({ scheduled_time: new_time_window }, { transaction: t });
+      }
+      return { days, newEnd };
     });
 
-    if (new_time_window) {
-      const [extras] = await SprayingOrderExtras.findOrCreate({
-        where: { booking_id },
-        defaults: { booking_id },
-      });
-      await extras.update({ scheduled_time: new_time_window });
+    if (result.error) {
+      return res.status(result.error.status).json({ success: false, message: result.error.message });
     }
+    const { days, newEnd } = result;
 
-    return res.status(200).json({ success: true, message: 'Booking rescheduled successfully' });
+    return res.status(200).json({
+      success: true,
+      message: 'Booking rescheduled successfully',
+      data: {
+        start_date: toYMD(newStart),
+        end_date: toYMD(newEnd),
+        num_of_days: days,
+        status: toAppStatus(OrderStatusEnum.WAITING_FOR_CONFIRMATION),
+      },
+    });
   } catch (error) {
-    console.error('rescheduleFarmerBooking error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'rescheduleFarmerBooking');
   }
 };
 

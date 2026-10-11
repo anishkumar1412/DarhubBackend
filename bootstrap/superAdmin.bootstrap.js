@@ -50,15 +50,15 @@ const ensureSuperAdminRole = async (t) => {
 
 const dispatchSetupEmail = async (email, fullName, rawToken) => {
   const setupLink = buildSetupLink(rawToken);
-  console.log(`\n🔑 [Bootstrap] Super admin setup link for ${email}:`);
-  console.log(`   ${setupLink}\n`);
   try {
     await sendAdminSetupEmail(email, fullName, setupLink);
     console.log(`✅ [Bootstrap] Setup email sent to ${email}`);
   } catch (err) {
+    // The email could not go out. The one-time link is the only way in, so print it here — this is a
+    // first-run console message for the operator, and it is the one place a link is allowed in the logs.
     console.warn(
-      `⚠️  [Bootstrap] Could not send setup email (${err.message}). ` +
-      `Use the link logged above to complete setup.`
+      `⚠️  [Bootstrap] Could not send setup email (${err.message}).\n` +
+      `   Use this one-time link to complete setup:\n   ${setupLink}\n`
     );
   }
 };

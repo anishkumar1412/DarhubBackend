@@ -10,34 +10,50 @@ import {
   getPilotOrderDetails,
   pilotUpload
 } from "../controllers/pilotWorkController.js";
+import {
+  getMyAssignments,
+  getMyAssignmentDetail,
+  rejectAssignment,
+} from "../controllers/pilotAssignments.controller.js";
 import { authenticatePilot } from "../middleware/pilotAuth.middleware.js";
 
 const pilotWorkRouter = express.Router();
 
-// 1. Get all orders assigned to a pilot
-pilotWorkRouter.get("/orders/:pilot_user_id", getPilotOrders);
+// Every pilot endpoint needs the pilot's login token. The pilot is always the token's user:
+// no endpoint trusts a pilot id sent in the URL/body, and each one checks the work belongs to that pilot.
+pilotWorkRouter.use(authenticatePilot);
 
-// 2. Pilot confirms their availability for specific dates on a booking.
-//    authenticatePilot is REQUIRED here — it reads pilot identity from
-//    the signed JWT so no one can spoof another pilot's ID via the body.
-pilotWorkRouter.post("/confirm-assignment", authenticatePilot, confirmAssignment);
+// ── Assigned bookings ("requests" + "orders") ─────────────────────────────────
+// 1. All bookings assigned to the logged-in pilot (filter: ?request_status= &mission_state=)
+pilotWorkRouter.get("/assignments", getMyAssignments);
 
-// 3. Get detailed info about a specific order
-pilotWorkRouter.get("/order-details/:booking_id", getPilotOrderDetails);
+// 2. One assigned booking with per-day work details and timeline
+pilotWorkRouter.get("/assignments/:booking_id", getMyAssignmentDetail);
 
-// 4. Start a working day
+// 3. Accept: body { booking_id, accepted_dates: [...] } or { booking_id, accept_all: true }
+pilotWorkRouter.post("/confirm-assignment", confirmAssignment);
+
+// 4. Decline with a reason: body { booking_id, reason, dates?: [...] }
+pilotWorkRouter.post("/reject-assignment", rejectAssignment);
+
+// ── Doing the work ───────────────────────────────────────────────────────────
+// 5. Start a working day
 pilotWorkRouter.post("/start-day", startDay);
 
-// 5. Update daily work details (fertilizer, pesticide, etc.)
+// 6. Update daily work details (fertilizer, pesticide, etc.)
 pilotWorkRouter.post("/update-work", updatePilotWorkDetails);
 
-// 6. Upload a field image for a specific daily log
+// 7. Upload a field image for a specific daily log
 pilotWorkRouter.post("/upload-field-image/:log_id", pilotUpload.single("land_image"), uploadFieldImage);
 
-// 7. End the working day
+// 8. End the working day
 pilotWorkRouter.post("/end-day", endDay);
 
-// 8. Add a comment/note to an order
+// 9. Add a comment/note to an order
 pilotWorkRouter.post("/add-comment", addPilotComment);
+
+// ── Older read endpoints (kept; now restricted to the logged-in pilot) ───────
+pilotWorkRouter.get("/orders/:pilot_user_id", getPilotOrders);
+pilotWorkRouter.get("/order-details/:booking_id", getPilotOrderDetails);
 
 export default pilotWorkRouter;

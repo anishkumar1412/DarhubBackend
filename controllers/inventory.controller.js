@@ -1,5 +1,6 @@
 import { Op } from "sequelize";
 import db from "../models/index.js";
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const {
   InventoryAccessory,
@@ -113,18 +114,18 @@ export const filterAccessories = async (req, res) => {
     const allowedSort = ["sku", "name", "quantity", "min_stock", "status", "created_on"];
     const orderField = allowedSort.includes(sortBy) ? sortBy : "created_on";
     const orderDir = sortDir?.toUpperCase() === "ASC" ? "ASC" : "DESC";
-    const offset = (Math.max(1, Number(page)) - 1) * Number(pageSize);
+    const offset = (clampPage(page) - 1) * clampLimit(pageSize, 10);
 
     const { count, rows } = await InventoryAccessory.findAndCountAll({
       where,
       order: [[orderField, orderDir]],
-      limit: Number(pageSize),
+      limit: clampLimit(pageSize, 10),
       offset,
     });
 
     return res.status(200).json({
       success: true, total: count, page: Number(page),
-      pageSize: Number(pageSize), totalPages: Math.ceil(count / Number(pageSize)),
+      pageSize: clampLimit(pageSize, 10), totalPages: Math.ceil(count / clampLimit(pageSize, 10)),
       data: rows,
     });
   } catch (error) {
@@ -234,18 +235,18 @@ export const filterInventoryDrones = async (req, res) => {
     const allowedSort = ["drone_code", "drone_type", "pilot", "status", "created_on"];
     const orderField = allowedSort.includes(sortBy) ? sortBy : "created_on";
     const orderDir = sortDir?.toUpperCase() === "ASC" ? "ASC" : "DESC";
-    const offset = (Math.max(1, Number(page)) - 1) * Number(pageSize);
+    const offset = (clampPage(page) - 1) * clampLimit(pageSize, 10);
 
     const { count, rows } = await InventoryDrone.findAndCountAll({
       where,
       order: [[orderField, orderDir]],
-      limit: Number(pageSize),
+      limit: clampLimit(pageSize, 10),
       offset,
     });
 
     return res.status(200).json({
       success: true, total: count, page: Number(page),
-      pageSize: Number(pageSize), totalPages: Math.ceil(count / Number(pageSize)),
+      pageSize: clampLimit(pageSize, 10), totalPages: Math.ceil(count / clampLimit(pageSize, 10)),
       data: rows,
     });
   } catch (error) {
@@ -282,12 +283,12 @@ export const getLowStockItems = async (req, res) => {
     const allowedSort = ["sku", "name", "quantity", "min_stock", "unit_price", "created_on"];
     const orderField = allowedSort.includes(sortBy) ? sortBy : "quantity";
     const orderDir = sortDir?.toUpperCase() === "ASC" ? "ASC" : "DESC";
-    const offset = (Math.max(1, Number(page)) - 1) * Number(pageSize);
+    const offset = (clampPage(page) - 1) * clampLimit(pageSize, 10);
 
     const { count, rows } = await InventoryAccessory.findAndCountAll({
       where,
       order: [[orderField, orderDir]],
-      limit: Number(pageSize),
+      limit: clampLimit(pageSize, 10),
       offset,
     });
 
@@ -302,7 +303,7 @@ export const getLowStockItems = async (req, res) => {
 
     return res.status(200).json({
       success: true, total: count, page: Number(page),
-      pageSize: Number(pageSize), totalPages: Math.ceil(count / Number(pageSize)),
+      pageSize: clampLimit(pageSize, 10), totalPages: Math.ceil(count / clampLimit(pageSize, 10)),
       data,
     });
   } catch (error) {
@@ -422,18 +423,18 @@ export const filterShipments = async (req, res) => {
     const allowedSort = ["shipment_code", "item_name", "dispatch_date", "estimated_arrival", "status", "created_on"];
     const orderField = allowedSort.includes(sortBy) ? sortBy : "created_on";
     const orderDir = sortDir?.toUpperCase() === "ASC" ? "ASC" : "DESC";
-    const offset = (Math.max(1, Number(page)) - 1) * Number(pageSize);
+    const offset = (clampPage(page) - 1) * clampLimit(pageSize, 10);
 
     const { count, rows } = await InventoryShipment.findAndCountAll({
       where,
       order: [[orderField, orderDir]],
-      limit: Number(pageSize),
+      limit: clampLimit(pageSize, 10),
       offset,
     });
 
     return res.status(200).json({
       success: true, total: count, page: Number(page),
-      pageSize: Number(pageSize), totalPages: Math.ceil(count / Number(pageSize)),
+      pageSize: clampLimit(pageSize, 10), totalPages: Math.ceil(count / clampLimit(pageSize, 10)),
       data: rows,
     });
   } catch (error) {
@@ -582,12 +583,12 @@ export const filterMaintenanceLogs = async (req, res) => {
     const allowedSort = ["date", "log_ref", "drone_code", "component", "cost_value", "status", "created_on"];
     const orderField = allowedSort.includes(sortBy) ? sortBy : "created_on";
     const orderDir = sortDir?.toUpperCase() === "ASC" ? "ASC" : "DESC";
-    const offset = (Math.max(1, Number(page)) - 1) * Number(pageSize);
+    const offset = (clampPage(page) - 1) * clampLimit(pageSize, 10);
 
     const { count, rows } = await MaintenanceLog.findAndCountAll({
       where,
       order: [[orderField, orderDir]],
-      limit: Number(pageSize),
+      limit: clampLimit(pageSize, 10),
       offset,
       include: [{
         model: db.PilotMaintenanceTask,
@@ -610,7 +611,7 @@ export const filterMaintenanceLogs = async (req, res) => {
 
     return res.status(200).json({
       success: true, total: count, page: Number(page),
-      pageSize: Number(pageSize), totalPages: Math.ceil(count / Number(pageSize)),
+      pageSize: clampLimit(pageSize, 10), totalPages: Math.ceil(count / clampLimit(pageSize, 10)),
       data: mappedRows,
     });
   } catch (error) {
@@ -732,18 +733,18 @@ export const filterPurchaseOrders = async (req, res) => {
     const allowedSort = ["po_number", "part_name", "total_cost", "status", "created_on"];
     const orderField = allowedSort.includes(sortBy) ? sortBy : "created_on";
     const orderDir = sortDir?.toUpperCase() === "ASC" ? "ASC" : "DESC";
-    const offset = (Math.max(1, Number(page)) - 1) * Number(pageSize);
+    const offset = (clampPage(page) - 1) * clampLimit(pageSize, 10);
 
     const { count, rows } = await PurchaseOrder.findAndCountAll({
       where,
       order: [[orderField, orderDir]],
-      limit: Number(pageSize),
+      limit: clampLimit(pageSize, 10),
       offset,
     });
 
     return res.status(200).json({
       success: true, total: count, page: Number(page),
-      pageSize: Number(pageSize), totalPages: Math.ceil(count / Number(pageSize)),
+      pageSize: clampLimit(pageSize, 10), totalPages: Math.ceil(count / clampLimit(pageSize, 10)),
       data: rows,
     });
   } catch (error) {

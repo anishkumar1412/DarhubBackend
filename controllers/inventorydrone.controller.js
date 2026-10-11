@@ -6,6 +6,7 @@
  */
 
 import db from '../models/index.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const { InventoryDrone, Op } = db;
 
@@ -76,12 +77,12 @@ export const getAllDrones = async (req, res) => {
 
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await InventoryDrone.findAndCountAll({
       where,
       order: [['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
     });
 
@@ -89,8 +90,8 @@ export const getAllDrones = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllDrones error:', err);

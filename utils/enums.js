@@ -12,3 +12,18 @@ export const OrderStatusEnum = {
   ORDER_CANCELLED: 'ORDER_CANCELLED',
   ORDER_REJECTED: 'ORDER_REJECTED'
 };
+
+
+/**
+ * Order statuses in which a pilot may start a working day that they have already confirmed.
+ * WAITING_FOR_CONFIRMATION is included on purpose: the admin adding one more day to a running booking moves
+ * the order back to it, and that must not block the days the pilot already accepted. The per-day
+ * confirmation (`is_pilot_confirmed`) is what actually gates a day.
+ */
+export const PILOT_STARTABLE_ORDER_STATUSES = [
+  OrderStatusEnum.ORDER_ACCEPTED,
+  OrderStatusEnum.ORDER_STARTED,
+  OrderStatusEnum.JOB_STARTED,
+  OrderStatusEnum.JOB_ENDED,
+  OrderStatusEnum.WAITING_FOR_CONFIRMATION,
+];

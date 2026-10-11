@@ -7,6 +7,7 @@ import env from '../config/env.js';
 import { ApiResponse } from '../utils/apiResponse.js';
 import { ApiError } from '../utils/apiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import logger from '../utils/logger.js';
 import {
   generateOneTimeToken,
   hashToken,
@@ -224,9 +225,11 @@ export const forgotPasswordController = asyncHandler(async (req, res) => {
     });
 
     const resetLink = buildResetLink(raw);
-    console.log(`[Admin] Reset link for ${email}:`, resetLink);
+    if (env.NODE_ENV !== 'production') logger.info(`[Admin] Reset link for ${email}: ${resetLink}`);
 
-    await sendPasswordResetEmail(email, profile.full_name, resetLink);
+    // Not awaited: the answer must look the same (and take the same time) whether or not the account exists,
+    // and a mail-server problem must not turn this public endpoint into an error. Failures are logged by the mail service.
+    sendPasswordResetEmail(email, profile.full_name, resetLink).catch(() => {});
   }
 
   return res
@@ -360,21 +363,29 @@ export const createAdminController = asyncHandler(async (req, res) => {
     );
   });
 
-  // Send setup email (after transaction commits — fire and forget on error)
+  // Send the setup email after the transaction commits. The account exists either way; the caller is told
+  // whether the invitation went out so the admin can use "resend setup" instead of assuming it was delivered.
   const setupLink = buildSetupLink(raw);
-  console.log(`[Admin] Setup link for ${email}:`, setupLink);
+  if (env.NODE_ENV !== 'production') logger.info(`[Admin] Setup link for ${email}: ${setupLink}`);
 
-  sendAdminSetupEmail(email, full_name, setupLink).catch((err) =>
-    console.error('[Email] Failed to send setup email:', err.message)
-  );
+  let emailSent = true;
+  let emailError = null;
+  try {
+    await sendAdminSetupEmail(email, full_name, setupLink);
+  } catch (err) {
+    emailSent = false;
+    emailError = err.message;
+  }
 
   return res
     .status(201)
     .json(
       new ApiResponse(
         201,
-        { email, full_name, role: role.role_name },
-        `Admin created. Setup email sent to ${email}.`
+        { email, full_name, role: role.role_name, email_sent: emailSent, ...(emailError && { email_error: emailError }) },
+        emailSent
+          ? `Admin created. Setup email sent to ${email}.`
+          : `Admin created, but the setup email could not be sent to ${email}. Use "resend setup" once email is working.`
       )
     );
 });

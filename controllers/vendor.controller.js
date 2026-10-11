@@ -1,6 +1,7 @@
 import db from '../models/index.js';
 import { uploadToCloudinary } from '../middleware/upload.js';
 import cloudinary from 'cloudinary';
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const {
   Vendor,
@@ -235,11 +236,11 @@ export const getAllVendors = async (req, res) => {
       ];
     }
 
-    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 10);
 
     const { count, rows } = await Vendor.findAndCountAll({
       where,
-      limit: parseInt(limit, 10),
+      limit: clampLimit(limit, 10),
       offset,
       order: [['id', 'DESC']],
     });
@@ -249,9 +250,9 @@ export const getAllVendors = async (req, res) => {
       data: rows,
       pagination: {
         total: count,
-        page: parseInt(page, 10),
-        limit: parseInt(limit, 10),
-        totalPages: Math.ceil(count / parseInt(limit, 10)),
+        page: clampPage(page),
+        limit: clampLimit(limit, 10),
+        totalPages: Math.ceil(count / clampLimit(limit, 10)),
       },
     });
   } catch (err) {

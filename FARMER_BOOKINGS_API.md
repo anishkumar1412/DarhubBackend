@@ -17,7 +17,7 @@ GET /api/farmer/bookings
 **Query Parameters**
 - `status` (string, optional): Filter by booking status. Valid values: `PENDING`, `UPCOMING`, `ONGOING`, `COMPLETED`, `CANCELLED`. If omitted, returns all bookings.
 - `page` (number, optional): Page number for pagination. Default is `1`.
-- `limit` (number, optional): Number of records per page. Default is `10`.
+- `limit` (number, optional): Number of records per page. Default is `10`, at most `50` (a larger value is reduced to 50).
 
 **Request Example**
 ```http
@@ -109,3 +109,12 @@ Authorization: Bearer <token>
   ]
 }
 ```
+
+## Rules (latest)
+- A farmer sees only bookings made for or by their own account (bookings of other accounts that share the same mobile
+  number are no longer included).
+- `booking_id` must be a UUID (`400` otherwise). Another farmer's booking returns `404`.
+- `PATCH .../rate`: `rating` is a whole number 1-5, and only completed bookings can be rated (it can be changed later).
+- `POST .../cancel`: `cancellation_reason` is optional, at most 500 characters.
+- `PATCH .../reschedule`: `new_date` (`YYYY-MM-DD`) today or later in India and at most a year ahead; `new_time_window`
+  at most 50 characters.

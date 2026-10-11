@@ -10,6 +10,7 @@
  */
 
 import db from '../models/index.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const { MaintenanceLog, SalesOrder, PilotMaintenanceAttachment, PilotMaintenanceChecklist, Op } = db;
 
@@ -117,12 +118,12 @@ export const getAllMaintenanceLogs = async (req, res) => {
     if (hub) andConditions.push({ location: { [Op.like]: `%${hub}%` } });
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await MaintenanceLog.findAndCountAll({
       where,
       order: [['date', 'DESC'], ['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
     });
 
@@ -182,8 +183,8 @@ export const getAllMaintenanceLogs = async (req, res) => {
       success: true,
       data: mappedRows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllMaintenanceLogs error:', err);
@@ -409,7 +410,7 @@ export const getAllPilotMaintenanceTasks = async (req, res) => {
 
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await PilotMaintenanceTask.findAndCountAll({
       where,
@@ -438,7 +439,7 @@ export const getAllPilotMaintenanceTasks = async (req, res) => {
         },
       ],
       order: [['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
       distinct: true,
     });
@@ -447,8 +448,8 @@ export const getAllPilotMaintenanceTasks = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllPilotMaintenanceTasks error:', err);

@@ -1,5 +1,6 @@
 import db from "../models/index.js";
 import { Op } from "sequelize";
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const { Warehouse, WarehouseLocation, WarehouseAdditional } = db;
 
@@ -171,8 +172,8 @@ export const getAllWarehouses = async (req, res) => {
       ];
     }
 
-    const limit = pageSize ? parseInt(pageSize) : 10;
-    const offset = page ? (parseInt(page) - 1) * limit : 0;
+    const limit = clampLimit(pageSize, 10);
+    const offset = (clampPage(page) - 1) * limit;
 
     const { count, rows } = await Warehouse.findAndCountAll({
       where: condition,
@@ -219,7 +220,7 @@ export const getAllWarehouses = async (req, res) => {
       data: mergedData,
       totalCount: count,
       totalPages: Math.ceil(count / limit),
-      page: page ? parseInt(page) : 1,
+      page: clampPage(page),
       pageSize: limit,
     });
   } catch (error) {

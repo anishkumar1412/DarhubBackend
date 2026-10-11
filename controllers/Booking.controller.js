@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import db from "../models/index.js";
 import { OrderStatusEnum } from "../utils/enums.js";
 import { updateOrderStatus } from "../utils/orderUtils.js";
+import { respondWithError } from "../middleware/errorHandler.js";
 
 const {
   User,
@@ -544,10 +545,24 @@ export const updateOrder = async (req, res) => {
         district: address.district,
         block: address.block,
         village: address.village,
-        address1: address.address1,
-        address2: address.address2,
+        lane1: address.lane1 || address.address1,
+        lane2: address.lane2 || address.address2,
+        address1: address.address1 || address.lane1,
+        address2: address.address2 || address.lane2,
+        pincode: address.pincode,
       });
     }
+
+    // Remember what pilots already confirmed so rebuilding the rows below does not wipe it
+    const previousLogs = daily_logs?.length > 0
+      ? await SprayingDailyLogs.findAll({ where: { spraying_work_id: booking_id } })
+      : [];
+    const dayKey = (d, pilotId) => `${new Date(d).toISOString().slice(0, 10)}|${pilotId || ''}`;
+    const previousConfirmation = new Map(
+      previousLogs
+        .filter(l => l.is_pilot_confirmed !== null && l.is_pilot_confirmed !== undefined)
+        .map(l => [dayKey(l.working_date, l.pilot_user_id), l])
+    );
 
     // ✅ Handle work_assignees dynamically (for all unique pilot_user_id)
     if (daily_logs?.length > 0) {
@@ -564,12 +579,18 @@ export const updateOrder = async (req, res) => {
         // Find any log for this pilot to extract related info
         const logForPilot = daily_logs.find(log => log.pilot_user_id === pilotId);
 
+        const pilotHasConfirmed = daily_logs.some(
+          log => log.pilot_user_id === pilotId && log.working_date &&
+            (log.is_pilot_confirmed === true ||
+              previousConfirmation.get(dayKey(log.working_date, pilotId))?.is_pilot_confirmed === true)
+        );
+
         await SprayingWorkAssignee.create({
           booking_id,
           drone_id: logForPilot?.drone_id || null,
           pilot_user_id: pilotId,
           co_pilot_user_id: logForPilot?.co_pilot_user_id || null,
-          is_pilot_confirm: false,
+          is_pilot_confirm: pilotHasConfirmed,
           is_copilot_confirm: false,
         });
       }
@@ -581,7 +602,9 @@ export const updateOrder = async (req, res) => {
 
       const logsToInsert = daily_logs
         .filter(log => log.working_date)
-        .map(log => ({
+        .map(log => {
+          const prev = previousConfirmation.get(dayKey(log.working_date, log.pilot_user_id));
+          return {
           spraying_work_id: booking_id,
           working_date: log.working_date,
           land_image_original_name: log.land_image_original_name,
@@ -594,7 +617,13 @@ export const updateOrder = async (req, res) => {
           pilot_user_id: log.pilot_user_id || null,
           co_pilot_user_id: log.co_pilot_user_id || null,
           drone_id: log.drone_id || null,
-        }));
+          // keep the pilot's confirmation for days whose pilot did not change
+          is_pilot_confirmed: log.is_pilot_confirmed ?? prev?.is_pilot_confirmed ?? null,
+          pilot_confirmed_at: log.pilot_confirmed_at ?? prev?.pilot_confirmed_at ?? null,
+          is_active: true,
+          created_on: new Date(),
+          };
+        });
 
       // Bulk insert for performance
       await SprayingDailyLogs.bulkCreate(logsToInsert, { validate: false });
@@ -1310,237 +1339,212 @@ export const getOrdersByUserId = async (req, res) => {
 };
 
 
+// Columns a client may sort by (anything else used to reach the database and fail with a 500)
+const FILTER_SORTABLE = new Set(["created_on", "modified_on", "start_date", "end_date", "order_status", "total_price", "land_in_acers", "booking_id"]);
+
+// "50%_off" must match literally inside a LIKE pattern
+const likePattern = (value) => `%${String(value).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+const intersect = (current, ids) => (current === null ? ids : current.filter((id) => ids.includes(id)));
+
+/**
+ * POST /order/filterOrder (farmer: own orders), POST /order/filter-orders (admin)
+ * Body: { page, pageSize (max 100), orderBy, orderType, booking_id, is_paid, is_active, user_id (admin only),
+ *         order_status, state, pilot_name }   (the last three: case-insensitive "contains")
+ *
+ * Filtering and paging happen in the database, and the related rows are loaded for the returned page only, in a
+ * fixed number of queries. It used to load EVERY order, run ~10 sequential queries per order, then filter and page
+ * in memory, so one request got slower with every booking ever made.
+ */
 export const filterOrders = async (req, res) => {
   try {
     const filters = req.body || {};
-    const page = parseInt(filters.page) || 1;
-    const pageSize = parseInt(filters.pageSize) || 10;
-    const orderBy = filters.orderBy || "created_on";
-    const orderType =
-      filters.orderType?.toUpperCase() === "ASC" ? "ASC" : "DESC";
+    const page = Math.max(1, parseInt(filters.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(filters.pageSize, 10) || 10));
+    const orderBy = FILTER_SORTABLE.has(filters.orderBy) ? filters.orderBy : "created_on";
+    const orderType = String(filters.orderType || "").toUpperCase() === "ASC" ? "ASC" : "DESC";
 
     const cleanData = (data) => {
       if (!data) return null;
-      const { id, createdAt, updatedAt, ...rest } =
-        data.dataValues || data;
+      const { id, createdAt, updatedAt, ...rest } = data.dataValues || data;
       return rest;
     };
 
-    const getUserName = async (user_id) => {
-      if (!user_id) return null;
-      const user = await UserProfile.findOne({ where: { user_id } });
-      return user
-        ? `${user.first_name || ""} ${user.last_name || ""}`.trim()
-        : null;
-    };
-
-    const matchInsensitive = (a, b) => {
-      if (!b) return true;
-      if (a === null || a === undefined) return false;
-      return a.toString().toLowerCase().includes(b.toString().toLowerCase());
-    };
-
-    const matchNumeric = (a, b) => {
-      if (b === undefined || b === null) return true;
-      return Number(a) === Number(b);
-    };
+    const empty = () => res.status(200).json({ total: 0, currentPage: page, totalPages: 0, orders: [] });
 
     // ---------------- BASE WHERE ----------------
     const orderWhere = {};
-    if (filters.booking_id) orderWhere.booking_id = filters.booking_id;
+    if (filters.booking_id) orderWhere.booking_id = String(filters.booking_id);
     if (filters.is_paid !== undefined) orderWhere.is_paid = filters.is_paid;
-    if (filters.is_active !== undefined)
-      orderWhere.is_active = filters.is_active;
+    if (filters.is_active !== undefined) orderWhere.is_active = filters.is_active;
+    if (filters.order_status) orderWhere.order_status = { [Op.iLike]: likePattern(filters.order_status) };
 
-    // ---------------- USER-ID SCOPE FILTER (NEW) ----------------
-    let effectiveUserId = filters.user_id || req.user?.id;
-    if (!effectiveUserId && req.headers?.authorization && req.headers.authorization.startsWith("Bearer ")) {
-      try {
-        const token = req.headers.authorization.split(" ")[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        if (decoded?.id) {
-          if (decoded.user_type === 1 || decoded.user_type === 3) {
-            effectiveUserId = decoded.id;
-          } else if (decoded.user_type === 2) {
-            // Admin user: do not scope automatically unless filters.user_id provided
-          } else {
-            const userRec = await User.findOne({ where: { id: decoded.id }, attributes: ["id", "user_type"] });
-            if (userRec && userRec.user_type !== 2) {
-              effectiveUserId = userRec.id;
-            }
-          }
-        }
-      } catch (e) { /* ignore */ }
-    }
+    // Booking ids the filters below allow (null: no restriction yet)
+    let allowedIds = null;
 
+    // ---------------- USER-ID SCOPE FILTER ----------------
+    // Admins see everything unless they ask for one user's orders. Anyone else is always limited to their own
+    // (the route sets user_id for them; this is the second line of defence if it is ever reused without that).
+    const caller = req.auth;
+    const effectiveUserId = caller && !caller.isAdmin ? caller.id : filters.user_id;
     if (effectiveUserId) {
-      // 1️⃣ Orders created by user or where user is farmer
-      const createdOrders = await SprayingOrder.findAll({
-        where: {
-          [Op.or]: [
-            { user_id: effectiveUserId },
-            { created_by: effectiveUserId },
-          ],
-        },
-        attributes: ["booking_id"],
-      });
-
-      // 2️⃣ Orders where user is pilot / co-pilot (assignee)
-      const assigneeOrders = await SprayingWorkAssignee.findAll({
-        where: {
-          [Op.or]: [
-            { pilot_user_id: effectiveUserId },
-            { co_pilot_user_id: effectiveUserId },
-          ],
-        },
-        attributes: ["booking_id"],
-      });
-
-      // 3️⃣ Orders where user appears in daily logs
-      const dailyLogOrders = await SprayingDailyLogs.findAll({
-        where: {
-          [Op.or]: [
-            { pilot_user_id: effectiveUserId },
-            { co_pilot_user_id: effectiveUserId },
-          ],
-        },
-        attributes: ["spraying_work_id"],
-      });
-
-      const bookingIds = new Set([
-        ...createdOrders.map(o => o.booking_id),
-        ...assigneeOrders.map(a => a.booking_id),
-        ...dailyLogOrders.map(d => d.spraying_work_id),
+      const [createdOrders, assigneeOrders, dailyLogOrders] = await Promise.all([
+        SprayingOrder.findAll({ where: { [Op.or]: [{ user_id: effectiveUserId }, { created_by: effectiveUserId }] }, attributes: ["booking_id"], raw: true }),
+        SprayingWorkAssignee.findAll({ where: { [Op.or]: [{ pilot_user_id: effectiveUserId }, { co_pilot_user_id: effectiveUserId }] }, attributes: ["booking_id"], raw: true }),
+        SprayingDailyLogs.findAll({ where: { [Op.or]: [{ pilot_user_id: effectiveUserId }, { co_pilot_user_id: effectiveUserId }] }, attributes: ["spraying_work_id"], raw: true }),
       ]);
-
-      if (bookingIds.size === 0) {
-        return res.status(200).json({
-          total: 0,
-          currentPage: page,
-          totalPages: 0,
-          orders: [],
-        });
-      }
-
-      orderWhere.booking_id = [...bookingIds];
+      allowedIds = [...new Set([
+        ...createdOrders.map((o) => o.booking_id),
+        ...assigneeOrders.map((a) => a.booking_id),
+        ...dailyLogOrders.map((d) => d.spraying_work_id),
+      ])];
+      if (!allowedIds.length) return empty();
     }
 
-    // ---------------- FETCH ORDERS ----------------
-    const orders = await SprayingOrder.findAll({
+    // ---------------- STATE NAME FILTER ----------------
+    if (filters.state) {
+      const states = await MasterState.findAll({ where: { state_name: { [Op.iLike]: likePattern(filters.state) } }, attributes: ["id"], raw: true });
+      const rows = states.length
+        ? await SprayingOrderAddress.findAll({ where: { state: states.map((s) => s.id) }, attributes: ["order_id"], raw: true })
+        : [];
+      allowedIds = intersect(allowedIds, [...new Set(rows.map((r) => r.order_id))]);
+      if (!allowedIds.length) return empty();
+    }
+
+    // ---------------- PILOT NAME FILTER (pilot of any working day) ----------------
+    if (filters.pilot_name) {
+      const pilots = await UserProfile.findAll({
+        where: db.sequelize.where(
+          db.sequelize.fn("concat_ws", " ", db.sequelize.col("first_name"), db.sequelize.col("last_name")),
+          { [Op.iLike]: likePattern(filters.pilot_name) },
+        ),
+        attributes: ["user_id"],
+        raw: true,
+      });
+      const rows = pilots.length
+        ? await SprayingDailyLogs.findAll({ where: { pilot_user_id: pilots.map((p) => p.user_id) }, attributes: ["spraying_work_id"], raw: true })
+        : [];
+      allowedIds = intersect(allowedIds, [...new Set(rows.map((r) => r.spraying_work_id))]);
+      if (!allowedIds.length) return empty();
+    }
+
+    if (allowedIds !== null) {
+      orderWhere.booking_id = orderWhere.booking_id
+        ? (allowedIds.includes(orderWhere.booking_id) ? orderWhere.booking_id : null)
+        : allowedIds;
+      if (orderWhere.booking_id === null) return empty();
+    }
+
+    // ---------------- ONE PAGE OF ORDERS ----------------
+    const { count: total, rows: orders } = await SprayingOrder.findAndCountAll({
       where: orderWhere,
       order: [[orderBy, orderType]],
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
     });
 
-    const filteredOrders = [];
+    // ---------------- RELATED ROWS FOR THIS PAGE (batched) ----------------
+    const ids = orders.map((o) => o.booking_id);
+    const none = Promise.resolve([]);
+    const [addresses, dailyLogs, comments, assignees] = ids.length
+      ? await Promise.all([
+          SprayingOrderAddress.findAll({ where: { order_id: ids }, order: [["id", "ASC"]] }),
+          SprayingDailyLogs.findAll({ where: { spraying_work_id: ids } }),
+          SprayingOrderComment.findAll({ where: { spraying_order_id: ids } }),
+          SprayingWorkAssignee.findAll({ where: { booking_id: ids } }),
+        ])
+      : [[], [], [], []];
 
-    for (const order of orders) {
+    const uniq = (values) => [...new Set(values.filter((v) => v !== null && v !== undefined))];
+    const userIds = uniq([
+      ...orders.flatMap((o) => [o.created_by, o.modified_by]),
+      ...dailyLogs.flatMap((l) => [l.pilot_user_id, l.co_pilot_user_id, l.verified_by]),
+      ...assignees.flatMap((a) => [a.pilot_user_id, a.co_pilot_user_id]),
+    ]);
+    const stateIds = uniq(addresses.map((a) => a.state));
+    const districtIds = uniq(addresses.map((a) => a.district));
+    const blockIds = uniq(addresses.map((a) => a.block));
+    const droneIds = uniq(assignees.map((a) => a.drone_id));
+
+    const [profiles, states, districts, blocks, drones] = await Promise.all([
+      userIds.length ? UserProfile.findAll({ where: { user_id: userIds }, attributes: ["user_id", "first_name", "last_name"], raw: true }) : none,
+      stateIds.length ? MasterState.findAll({ where: { id: stateIds }, attributes: ["id", "state_name"], raw: true }) : none,
+      districtIds.length ? MasterDistrict.findAll({ where: { id: districtIds }, attributes: ["id", "district_name"], raw: true }) : none,
+      blockIds.length ? MasterBlock.findAll({ where: { id: blockIds }, attributes: ["id", "block_name"], raw: true }) : none,
+      droneIds.length ? Drone1.findAll({ where: { id: droneIds } }) : none,
+    ]);
+
+    const nameByUser = new Map();
+    for (const p of profiles) {
+      if (!nameByUser.has(p.user_id)) nameByUser.set(p.user_id, `${p.first_name || ""} ${p.last_name || ""}`.trim());
+    }
+    const userName = (uId) => (uId ? nameByUser.get(uId) ?? null : null);
+    const stateName = new Map(states.map((s) => [s.id, s.state_name]));
+    const districtName = new Map(districts.map((d) => [d.id, d.district_name]));
+    const blockName = new Map(blocks.map((b) => [b.id, b.block_name]));
+    const droneById = new Map(drones.map((d) => [d.id, d]));
+    const byBooking = (rows, key) => {
+      const map = new Map();
+      for (const row of rows) (map.get(row[key]) || map.set(row[key], []).get(row[key])).push(row);
+      return map;
+    };
+    const addressByBooking = byBooking(addresses, "order_id");
+    const logsByBooking = byBooking(dailyLogs, "spraying_work_id");
+    const commentsByBooking = byBooking(comments, "spraying_order_id");
+    const assigneesByBooking = byBooking(assignees, "booking_id");
+
+    const paginated = orders.map((order) => {
       const orderData = cleanData(order);
+      const bookingId = orderData.booking_id;
 
-      // ---------------- ADDRESS ----------------
-      const address = await SprayingOrderAddress.findOne({
-        where: { order_id: orderData.booking_id },
-      });
+      const address = addressByBooking.get(bookingId)?.[0];
+      const fullAddress = address ? {
+        ...cleanData(address),
+        state_name: stateName.get(address.state) || null,
+        district_name: districtName.get(address.district) || null,
+        block_name: blockName.get(address.block) || null,
+      } : null;
 
-      let fullAddress = null;
-      if (address) {
-        const [stateObj, districtObj, blockObj] = await Promise.all([
-          MasterState.findOne({ where: { id: address.state } }),
-          MasterDistrict.findOne({ where: { id: address.district } }),
-          MasterBlock.findOne({ where: { id: address.block } }),
-        ]);
-
-        fullAddress = {
-          ...cleanData(address),
-          state_name: stateObj?.state_name || null,
-          district_name: districtObj?.district_name || null,
-          block_name: blockObj?.block_name || null,
-        };
-      }
-
-      // ---------------- DAILY LOGS ----------------
-      const dailyLogs = await SprayingDailyLogs.findAll({
-        where: { spraying_work_id: orderData.booking_id },
-      });
-
-      const cleanDailyLogs = [];
-      for (const log of dailyLogs) {
+      const cleanDailyLogs = (logsByBooking.get(bookingId) || []).map((log) => {
         const logData = cleanData(log);
-        cleanDailyLogs.push({
+        return {
           ...logData,
-          pilot_name: await getUserName(logData.pilot_user_id),
-          co_pilot_name: await getUserName(logData.co_pilot_user_id),
-          verifiedByName: await getUserName(logData.verified_by),
-        });
-      }
-
-      // ---------------- COMMENTS ----------------
-      const comments = await SprayingOrderComment.findAll({
-        where: { spraying_order_id: orderData.booking_id },
+          pilot_name: userName(logData.pilot_user_id),
+          co_pilot_name: userName(logData.co_pilot_user_id),
+          verifiedByName: userName(logData.verified_by),
+        };
       });
 
-      // ---------------- ASSIGNEE ----------------
-      const assignees = await SprayingWorkAssignee.findAll({
-        where: { booking_id: orderData.booking_id },
-      });
-
-      const cleanAssignee = [];
-      for (const a of assignees) {
+      const cleanAssignee = (assigneesByBooking.get(bookingId) || []).map((a) => {
         const data = cleanData(a);
-        const drone = await Drone1.findOne({ where: { id: data.drone_id } });
-
-        cleanAssignee.push({
+        const drone = droneById.get(data.drone_id);
+        return {
           ...data,
-          pilot_name: await getUserName(data.pilot_user_id),
-          co_pilot_name: await getUserName(data.co_pilot_user_id),
-          drone_name:
-            drone?.drone_name || drone?.name || drone?.droneName || null,
-        });
-      }
+          pilot_name: userName(data.pilot_user_id),
+          co_pilot_name: userName(data.co_pilot_user_id),
+          drone_name: drone?.drone_name || drone?.name || drone?.droneName || null,
+        };
+      });
 
-      const enriched = {
+      return {
         ...orderData,
-        created_by_name: await getUserName(orderData.created_by),
-        modified_by_name: await getUserName(orderData.modified_by),
+        created_by_name: userName(orderData.created_by),
+        modified_by_name: userName(orderData.modified_by),
         address: fullAddress,
         daily_logs: cleanDailyLogs,
-        comments: comments.map(cleanData),
+        comments: (commentsByBooking.get(bookingId) || []).map(cleanData),
         assignee: cleanAssignee,
       };
+    });
 
-      // ---------------- APPLY EXTRA FILTERS ----------------
-      let includeOrder = true;
-
-      if (filters.order_status &&
-        !matchInsensitive(orderData.order_status, filters.order_status))
-        includeOrder = false;
-
-      if (filters.state &&
-        !matchInsensitive(enriched.address?.state_name, filters.state))
-        includeOrder = false;
-
-      if (filters.pilot_name &&
-        !cleanDailyLogs.some(dl =>
-          matchInsensitive(dl.pilot_name, filters.pilot_name)))
-        includeOrder = false;
-
-      if (includeOrder) filteredOrders.push(enriched);
-    }
-
-    // ---------------- PAGINATION ----------------
-    const total = filteredOrders.length;
-    const start = (page - 1) * pageSize;
-    const paginated = filteredOrders.slice(start, start + pageSize);
-
-    res.status(200).json({
+    return res.status(200).json({
       total,
       currentPage: page,
       totalPages: Math.ceil(total / pageSize),
       orders: paginated,
     });
-
   } catch (error) {
-    console.error("Error filtering orders:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, "filterOrders");
   }
 };
 

@@ -11,6 +11,7 @@
 
 import db from '../models/index.js';
 import { uploadToCloudinary } from '../middleware/upload.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const {
   PilotMaintenanceTask,
@@ -593,7 +594,7 @@ export const getAllTasks = async (req, res) => {
 
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await PilotMaintenanceTask.findAndCountAll({
       where,
@@ -622,7 +623,7 @@ export const getAllTasks = async (req, res) => {
         },
       ],
       order: [['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
       distinct: true,
     });
@@ -631,8 +632,8 @@ export const getAllTasks = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllTasks error:', err);

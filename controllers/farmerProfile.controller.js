@@ -1,13 +1,49 @@
 import db from '../models/index.js';
+import { OrderStatusEnum } from '../utils/enums.js';
+import { respondWithError } from '../middleware/errorHandler.js';
+import { parseOrThrow } from '../middleware/validate.js';
+import { personalProfileUpdateSchema } from '../validation/farmer.schemas.js';
+import { checkLocationChain } from '../services/registration.service.js';
+import { resolveIdentityChange, consumeIdentityVerification } from '../services/identity.service.js';
+import { ApiError } from '../utils/apiError.js';
+
+// Resolve state/district/block ids to display names for a list of address rows (3 queries total).
+export const withLocationNames = async (addresses) => {
+  const list = addresses.filter(Boolean);
+  const ids = (key) => [...new Set(list.map((a) => a[key]).filter(Boolean))];
+  const [states, districts, blocks] = await Promise.all([
+    ids('state').length ? db.MasterState.findAll({ where: { id: ids('state') }, attributes: ['id', 'state_name'], raw: true }) : [],
+    ids('district').length ? db.MasterDistrict.findAll({ where: { id: ids('district') }, attributes: ['id', 'district_name'], raw: true }) : [],
+    ids('block').length ? db.MasterBlock.findAll({ where: { id: ids('block') }, attributes: ['id', 'block_name'], raw: true }) : [],
+  ]);
+  const byId = (rows, nameKey) => Object.fromEntries(rows.map((r) => [r.id, r[nameKey]]));
+  const stateNames = byId(states, 'state_name');
+  const districtNames = byId(districts, 'district_name');
+  const blockNames = byId(blocks, 'block_name');
+  return (addr) => addr && ({
+    lane_1: addr.lane_1,
+    lane_2: addr.lane_2,
+    state: addr.state,
+    district: addr.district,
+    block: addr.block,
+    state_name: stateNames[addr.state] || null,
+    district_name: districtNames[addr.district] || null,
+    block_name: blockNames[addr.block] || null,
+    village: addr.village,
+    pincode: addr.pincode,
+  });
+};
+
+// "123456789012" -> "XXXX XXXX 9012"
+export const maskAccountNumber = (num) => {
+  const digits = String(num || '');
+  return digits.length > 4 ? `XXXX XXXX ${digits.slice(-4)}` : digits;
+};
 
 export const getFarmerProfile = async (req, res) => {
   try {
     const userId = req.user.id || req.user.userId;
-    const { tab } = req.query;
-
-    if (!tab) {
-      return res.status(400).json({ success: false, message: 'tab query parameter is required' });
-    }
+    const { tab } = req.valid.query;
 
     // Common query to fetch user basic info since it's needed for multiple tabs
     const user = await db.User.findByPk(userId, {
@@ -38,7 +74,9 @@ export const getFarmerProfile = async (req, res) => {
         const upcomingBookingsCount = await db.SprayingOrder.count({
           where: {
             user_id: userId,
-            order_status: 'UPCOMING'
+            order_status: {
+              [db.Op.in]: [OrderStatusEnum.ORDER_ACCEPTED, OrderStatusEnum.ORDER_STARTED]
+            }
           }
         });
 
@@ -46,20 +84,19 @@ export const getFarmerProfile = async (req, res) => {
         // Since we are using UserAddress as farm, we don't have acreage in DB, mocking it.
         const totalAcres = farmAddresses.length * 10.5; // Mock data based on UI
 
-        console.log("farmAddress", farmAddresses);
-
+        const mainNames = primaryAddress ? (await withLocationNames([primaryAddress]))(primaryAddress) : null;
 
         responseData = {
           user_info: {
             name: userProfile ? `${userProfile.first_name || ''} ${userProfile.last_name || ''}`.trim() : user.username,
-            verified: true, // Assuming true for now or map from isMobileVerify/isEmailVerify
+            verified: Boolean(user.isMobileVerify || user.isEmailVerify),
             mobile_number: user.mobile_number,
             email: user.email,
-            member_since: user.createdAt,
+            member_since: user.created_on || null,
             account_type: 'Farmer',
             profile_image: userProfile?.user_image_url || null,
             location: primaryAddress
-              ? `${primaryAddress.village || primaryAddress.lane_1}, ${primaryAddress.district || ''}`
+              ? [primaryAddress.village || primaryAddress.lane_1, mainNames.district_name].filter(Boolean).join(', ')
               : null
           },
           farm_summary: {
@@ -91,15 +128,7 @@ export const getFarmerProfile = async (req, res) => {
             education: 'Graduate',
             occupation: 'Farmer'
           },
-          address_details: primaryAddress ? {
-            lane_1: primaryAddress.lane_1,
-            lane_2: primaryAddress.lane_2,
-            state: primaryAddress.state,
-            district: primaryAddress.district,
-            block: primaryAddress.block,
-            village: primaryAddress.village,
-            pincode: primaryAddress.pincode
-          } : null
+          address_details: primaryAddress ? (await withLocationNames([primaryAddress]))(primaryAddress) : null
         };
         break;
       }
@@ -110,6 +139,7 @@ export const getFarmerProfile = async (req, res) => {
           where: { user_id: userId, is_primary: false }
         });
 
+        const farmAddr = await withLocationNames(farmAddresses);
         const farms = farmAddresses.map((addr, index) => {
           return {
             id: addr.id,
@@ -120,15 +150,7 @@ export const getFarmerProfile = async (req, res) => {
             primary_soil_type: 'Clay Loam', // Mock
             water_source: 'Borewell', // Mock
             description: 'Agricultural farm focused on essential crops.',
-            address: {
-              lane_1: addr.lane_1,
-              lane_2: addr.lane_2,
-              state: addr.state,
-              district: addr.district,
-              block: addr.block,
-              village: addr.village,
-              pincode: addr.pincode
-            },
+            address: farmAddr(addr),
             fields: [
               { name: 'Field A', acres: 5, soil_type: 'Clay Loam', irrigation: 'Borewell' },
               { name: 'Field B', acres: 7.5, soil_type: 'Sandy Loam', irrigation: 'Drip' }
@@ -146,18 +168,13 @@ export const getFarmerProfile = async (req, res) => {
           order: [['is_primary', 'DESC']]
         });
 
+        const toNamed = await withLocationNames(allAddresses);
         responseData = {
           addresses: allAddresses.map(addr => ({
             id: addr.id,
             is_primary: addr.is_primary,
             type: addr.is_primary ? 'Home' : 'Farm/Warehouse',
-            lane_1: addr.lane_1,
-            lane_2: addr.lane_2,
-            state: addr.state,
-            district: addr.district,
-            block: addr.block,
-            village: addr.village,
-            pincode: addr.pincode
+            ...toNamed(addr),
           }))
         };
         break;
@@ -174,8 +191,16 @@ export const getFarmerProfile = async (req, res) => {
         });
 
         responseData = {
-          bank_accounts: bankDetails,
-          upi_details: upiDetails
+          bank_accounts: bankDetails.map((b) => ({
+            id: b.id,
+            bank_name: b.bank_name,
+            acc_holder_name: b.acc_holder_name,
+            acc_number: maskAccountNumber(b.acc_number),
+            ifsc_code: b.ifsc_code,
+            is_primary: b.is_primary,
+            passbook_image_url: b.passbook_image_url || null,
+          })),
+          upi_details: upiDetails.map((u) => ({ id: u.id, upi_id: u.upi_id })),
         };
         break;
       }
@@ -189,92 +214,80 @@ export const getFarmerProfile = async (req, res) => {
       data: responseData
     });
   } catch (error) {
-    console.error('Error fetching farmer profile:', error);
-    return res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
+    return respondWithError(req, res, error, 'getFarmerProfile');
   }
 };
+
+const ADDRESS_FIELDS = ['lane_1', 'lane_2', 'state', 'district', 'block', 'village', 'pincode'];
 
 export const updateFarmerProfile = async (req, res) => {
   try {
     const userId = req.user.id || req.user.userId;
-    const { tab } = req.query;
-
-    if (!tab) {
-      return res.status(400).json({ success: false, message: 'tab query parameter is required' });
+    if (req.valid.query.tab !== 'personal') {
+      return res.status(400).json({ success: false, message: 'Updating this tab is not supported yet' });
     }
+
+    // Field rules: validation/farmer.schemas.js (personalProfileUpdateSchema)
+    const { personal, address } = parseOrThrow(personalProfileUpdateSchema, req.body);
 
     const user = await db.User.findByPk(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Farmer not found' });
     }
 
-    let userProfile = await db.UserProfile.findOne({ where: { user_id: userId } });
-    if (!userProfile) {
-      userProfile = await db.UserProfile.create({
-        user_id: userId,
-        first_name: user.username || 'Unknown'
-      });
+    // E-mail / mobile: normalised, unique, and verified with an OTP before they change. This endpoint used to write
+    // whatever was sent, which let anyone take another person's number (and, through it, see their bookings).
+    const identity = await resolveIdentityChange(user, personal, { editedByAdmin: false });
+
+    // Address: only the parts that were sent change, and the resulting state -> district -> block chain must hold
+    let primaryAddress = null;
+    let addressValues = null;
+    if (address && Object.keys(address).length > 0) {
+      primaryAddress = await db.UserAddress.findOne({ where: { user_id: userId, is_primary: true } });
+      addressValues = Object.fromEntries(ADDRESS_FIELDS.map((k) => [k, address[k] ?? primaryAddress?.[k] ?? null]));
+      if (!primaryAddress) {
+        const missing = ['state', 'district', 'block', 'village', 'pincode'].filter((k) => !addressValues[k]);
+        if (missing.length) throw new ApiError(400, `address_details: ${missing.join(', ')} required for a new address`);
+      }
+      const problem = await checkLocationChain(db, addressValues);
+      if (problem) throw new ApiError(400, `address_details: ${problem}`);
     }
 
-    switch (tab) {
-      case 'personal': {
-        const { personal_info, address_details } = req.body;
+    const profileFields = {};
+    if (personal.first_name !== undefined) profileFields.first_name = personal.first_name;
+    if (personal.last_name !== undefined) profileFields.last_name = personal.last_name;
+    if (personal.dob !== undefined) profileFields.dob = personal.dob;
+    if (personal.profile_image !== undefined) profileFields.user_image_url = personal.profile_image;
+    if (personal.whatsapp_number !== undefined) profileFields.whatsapp_number = personal.whatsapp_number;
 
-        if (personal_info) {
-          if (personal_info.mobile_number !== undefined || personal_info.email !== undefined) {
-            await user.update({
-              mobile_number: personal_info.mobile_number !== undefined ? personal_info.mobile_number : user.mobile_number,
-              email: personal_info.email !== undefined ? personal_info.email : user.email,
-            });
-          }
-
-          await userProfile.update({
-            first_name: personal_info.first_name !== undefined ? personal_info.first_name : userProfile.first_name,
-            last_name: personal_info.last_name !== undefined ? personal_info.last_name : userProfile.last_name,
-            dob: personal_info.dob !== undefined ? personal_info.dob : userProfile.dob,
-            user_image_url: personal_info.profile_image !== undefined ? personal_info.profile_image : userProfile.user_image_url,
-          });
-        }
-
-        if (address_details) {
-          let primaryAddress = await db.UserAddress.findOne({
-            where: { user_id: userId, is_primary: true }
-          });
-
-          if (primaryAddress) {
-            await primaryAddress.update({
-              lane_1: address_details.lane_1 !== undefined ? address_details.lane_1 : primaryAddress.lane_1,
-              lane_2: address_details.lane_2 !== undefined ? address_details.lane_2 : primaryAddress.lane_2,
-              state: address_details.state !== undefined ? address_details.state : primaryAddress.state,
-              district: address_details.district !== undefined ? address_details.district : primaryAddress.district,
-              block: address_details.block !== undefined ? address_details.block : primaryAddress.block,
-              village: address_details.village !== undefined ? address_details.village : primaryAddress.village,
-              pincode: address_details.pincode !== undefined ? address_details.pincode : primaryAddress.pincode,
-            });
-          } else {
-            await db.UserAddress.create({
-              user_id: userId,
-              is_primary: true,
-              lane_1: address_details.lane_1,
-              lane_2: address_details.lane_2,
-              state: address_details.state,
-              district: address_details.district,
-              block: address_details.block,
-              village: address_details.village,
-              pincode: address_details.pincode,
-            });
-          }
-        }
-
-        return res.status(200).json({ success: true, message: 'Personal profile updated successfully' });
+    await db.sequelize.transaction(async (t) => {
+      if (Object.keys(identity).length > 0) {
+        await user.update({ ...identity, modified_by: userId, modified_on: new Date() }, { transaction: t });
+        await consumeIdentityVerification(identity, t);
       }
 
-      default:
-        return res.status(400).json({ success: false, message: 'Updating this tab is not supported yet' });
-    }
+      if (Object.keys(profileFields).length > 0) {
+        const profile = await db.UserProfile.findOne({ where: { user_id: userId }, transaction: t });
+        if (profile) {
+          await profile.update({ ...profileFields, modified_by: userId, modified_on: new Date() }, { transaction: t });
+        } else {
+          await db.UserProfile.create({
+            user_id: userId, first_name: user.username || '', ...profileFields, created_by: userId,
+          }, { transaction: t });
+        }
+      }
+
+      if (addressValues) {
+        if (primaryAddress) {
+          await primaryAddress.update({ ...addressValues, modified_by: userId, modified_on: new Date() }, { transaction: t });
+        } else {
+          await db.UserAddress.create({ user_id: userId, is_primary: true, ...addressValues, created_by: userId }, { transaction: t });
+        }
+      }
+    });
+
+    return res.status(200).json({ success: true, message: 'Personal profile updated successfully' });
   } catch (error) {
-    console.error('Error updating farmer profile:', error);
-    return res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
+    return respondWithError(req, res, error, 'updateFarmerProfile');
   }
 };
-

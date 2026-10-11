@@ -8,8 +8,12 @@ cloudinary.v2.config({
   api_secret: process.env.CLOUD_SECRET
 });
 
-// Multer memory storage
-const upload = multer({ storage: multer.memoryStorage() });
+// Multer memory storage. Files are held in RAM until they reach Cloudinary, so the limits matter: without them a
+// single request could send a multi-gigabyte body and exhaust the server's memory. (Handlers also check 5 MB per file.)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 6 * 1024 * 1024, files: 40, fields: 100, fieldSize: 256 * 1024 },
+});
 
 // Convert buffer to stream and upload
 export const uploadToCloudinary = async (fileBuffer, folder = "users", resourceType = "auto", originalName = null) => {

@@ -1,5 +1,6 @@
 import db from "../models/index.js";
 import { Op } from "sequelize";
+import { clampPage, clampLimit } from '../utils/pagination.js';
 
 const { ColumnSettings, UserProfile } = db;
 
@@ -174,8 +175,8 @@ export const filterColumns = async (req, res) => {
     // Default values
     order_by = order_by || "id";
     order_type = order_type?.toUpperCase() === "DESC" ? "DESC" : "ASC";
-    page = page && page > 0 ? parseInt(page) : 1;
-    page_size = page_size && page_size > 0 ? parseInt(page_size) : 10;
+    page = clampPage(page);
+    page_size = clampLimit(page_size, 10);
 
     const offset = (page - 1) * page_size;
 

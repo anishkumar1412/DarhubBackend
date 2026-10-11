@@ -3,8 +3,13 @@ import multer from 'multer';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import db from "../models/index.js";
-import { OrderStatusEnum } from '../utils/enums.js';
+import { fileURLToPath } from 'url';
+import { OrderStatusEnum, PILOT_STARTABLE_ORDER_STATUSES } from '../utils/enums.js';
 import { updateOrderStatus } from '../utils/orderUtils.js';
+import { ApiError } from '../utils/apiError.js';
+import { respondWithError } from '../middleware/errorHandler.js';
+import { parseDateOnly, todayIST, toYMD, readDayData, getDayStatus, stripDecline } from '../utils/dateUtils.js';
+import fs from 'fs';
 
 const {
   SprayingOrder,
@@ -17,9 +22,14 @@ const {
 } = db;
 
 // ── Multer config for land_image uploads ──────────────────────
+// Absolute path (the same folder server.js serves at /uploads), so uploads never depend on the working directory.
+const UPLOAD_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "uploads/");
+    cb(null, UPLOAD_DIR);
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
@@ -30,15 +40,59 @@ const storage = multer.diskStorage({
 
 export const pilotUpload = multer({
   storage,
+  limits: { fileSize: MAX_IMAGE_BYTES, files: 1 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ["image/jpeg", "image/png", "image/jpg"];
     if (!allowedTypes.includes(file.mimetype)) {
-      return cb(new Error("Only JPG, JPEG, and PNG files are allowed"));
+      return cb(new ApiError(400, "Only JPG, JPEG, and PNG files are allowed"));
     }
     cb(null, true);
   },
 });
 
+
+const WORK_FIELDS = [
+  "completed_acres",
+  "fertilizer_used",
+  "pesticide_used",
+  "water_used",
+  "notes",
+  "start_time",
+  "end_time",
+];
+
+const MAX_TEXT_LENGTH = 2000;
+const MAX_ACRES_PER_DAY = 10000;
+
+/**
+ * Validates and picks only the work fields the pilot actually sent (0 is a valid value; undefined/null/"" are ignored).
+ * Returns { fields } or { error } with a message the pilot can read.
+ */
+const parseWorkFields = (body = {}) => {
+  const fields = {};
+  for (const key of WORK_FIELDS) {
+    const v = body[key];
+    if (v === undefined || v === null || v === "") continue;
+
+    if (key === "completed_acres") {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_ACRES_PER_DAY) {
+        return { error: "completed_acres must be a number between 0 and 10000." };
+      }
+      fields[key] = n;
+    } else if (typeof v === "number" && Number.isFinite(v)) {
+      fields[key] = v;
+    } else if (typeof v === "string") {
+      if (v.length > MAX_TEXT_LENGTH) {
+        return { error: `${key} must be ${MAX_TEXT_LENGTH} characters or fewer.` };
+      }
+      fields[key] = v;
+    } else {
+      return { error: `${key} has an invalid value.` };
+    }
+  }
+  return { fields };
+};
 
 // ═══════════════════════════════════════════════════════════════
 //  1. GET /get-orders/:pilot_user_id
@@ -51,37 +105,50 @@ export const getPilotOrders = async (req, res) => {
     if (!pilot_user_id) {
       return res.status(400).json({ success: false, message: "pilot_user_id is required." });
     }
+    if (Number(pilot_user_id) !== req.pilot.id) {
+      return res.status(403).json({ success: false, message: "You can only view your own orders." });
+    }
 
-    // Find all assignee records for this pilot
-    const assignees = await SprayingWorkAssignee.findAll({
-      where: { pilot_user_id },
-      attributes: ["booking_id", "drone_id", "co_pilot_user_id"],
+    // Orders are found through the daily logs, which carry the per-date assignment
+    const myLogs = await SprayingDailyLogs.findAll({
+      where: { pilot_user_id, is_active: true },
+      order: [["working_date", "ASC"]],
     });
 
-    if (!assignees || assignees.length === 0) {
+    if (myLogs.length === 0) {
       return res.status(200).json({ success: true, orders: [], message: "No orders assigned to this pilot." });
     }
 
-    const bookingIds = assignees.map(a => a.booking_id);
+    const bookingIds = [...new Set(myLogs.map((l) => l.spraying_work_id))];
 
-    // Fetch all orders for these booking_ids
     const orders = await SprayingOrder.findAll({
       where: { booking_id: { [Op.in]: bookingIds } },
+      order: [["start_date", "ASC"]],
     });
 
-    // Fetch daily logs count for each order
+    const today = todayIST();
+
     const ordersWithMeta = await Promise.all(
       orders.map(async (order) => {
-        const dailyLogs = await SprayingDailyLogs.findAll({
-          where: { spraying_work_id: order.booking_id },
-          attributes: ["id", "working_date", "is_verified"],
-        });
+        const logs = myLogs.filter((l) => l.spraying_work_id === order.booking_id);
 
-        const assignee = assignees.find(a => a.booking_id === order.booking_id);
-
-        // Get address
         const address = await SprayingOrderAddress.findOne({
           where: { order_id: order.booking_id },
+        });
+
+        const working_days = logs.map((l, idx) => {
+          const date = toYMD(l.working_date);
+          const day_status = getDayStatus(l);
+          return {
+            log_id: l.id,
+            day_number: idx + 1,
+            date,
+            drone_id: l.drone_id,
+            is_pilot_confirmed: l.is_pilot_confirmed === true,
+            day_status,                       // scheduled | confirmed | started | completed
+            is_today: date === today,
+            can_start: day_status === "confirmed" && date <= today,
+          };
         });
 
         return {
@@ -97,18 +164,23 @@ export const getPilotOrders = async (req, res) => {
           address: address ? {
             village: address.village,
             address1: address.address1,
+            lane1: address.lane1,
+            lane2: address.lane2,
+            pincode: address.pincode,
           } : null,
-          total_logs: dailyLogs.length,
-          verified_logs: dailyLogs.filter(l => l.is_verified).length,
-          drone_id: assignee?.drone_id,
+          total_logs: logs.length,
+          verified_logs: logs.filter(l => l.is_verified).length,
+          pending_confirmation: working_days.filter(d => !d.is_pilot_confirmed).length,
+          drone_id: logs[0]?.drone_id ?? null,
+          co_pilot_user_id: logs[0]?.co_pilot_user_id ?? null,
+          working_days,
         };
       })
     );
 
     res.status(200).json({ success: true, orders: ordersWithMeta });
   } catch (error) {
-    console.error("Error fetching pilot orders:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, "getPilotOrders");
   }
 };
 
@@ -121,78 +193,140 @@ export const getPilotOrders = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 export const startDay = async (req, res) => {
   try {
-    const {
-      booking_id,
-      pilot_user_id,
-      co_pilot_user_id,
-      drone_id,
-      working_date,   // YYYY-MM-DD
-    } = req.body;
-
-    if (!booking_id || !pilot_user_id || !working_date) {
-      return res.status(400).json({ success: false, message: "booking_id, pilot_user_id, and working_date are required." });
+    // The pilot is whoever is logged in; a pilot_user_id in the body is never trusted.
+    const pilot_user_id = req.pilot.id;
+    const { booking_id, working_date } = req.body;
+    if (req.body.pilot_user_id !== undefined && Number(req.body.pilot_user_id) !== pilot_user_id) {
+      return res.status(403).json({ success: false, message: "pilot_user_id does not match the logged-in pilot." });
     }
 
-    // Verify the order exists
+    if (!booking_id || !working_date) {
+      return res.status(400).json({ success: false, message: "booking_id and working_date are required." });
+    }
+
+    const dateObj = parseDateOnly(working_date);
+    if (!dateObj) {
+      return res.status(400).json({ success: false, message: "working_date must be a valid date (YYYY-MM-DD)." });
+    }
+    const ymd = toYMD(dateObj);
+
     const order = await SprayingOrder.findByPk(booking_id);
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found." });
     }
 
-    // Normalize date
-    const dateObj = new Date(working_date);
-    dateObj.setUTCHours(0, 0, 0, 0);
+    // The day must have been scheduled by the admin for this pilot
+    const log = await SprayingDailyLogs.findOne({
+      where: { spraying_work_id: booking_id, working_date: dateObj, is_active: true },
+    });
+    if (!log) {
+      return res.status(404).json({
+        success: false,
+        message: `No work is scheduled for ${ymd} on this booking. Ask the admin to assign this date.`,
+      });
+    }
+    if (log.pilot_user_id !== Number(pilot_user_id)) {
+      return res.status(403).json({ success: false, message: "This working day is not assigned to you." });
+    }
 
-    // Check if a daily log already exists for this date
-    let log = await SprayingDailyLogs.findOne({
-      where: {
-        spraying_work_id: booking_id,
-        working_date: dateObj,
-      },
+    // Order must be accepted by the pilot and still running
+    if (!PILOT_STARTABLE_ORDER_STATUSES.includes(order.order_status)) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot start work while the order is ${order.order_status}.`,
+        order_status: order.order_status,
+      });
+    }
+    if (log.is_pilot_confirmed !== true) {
+      return res.status(409).json({
+        success: false,
+        message: "Accept this working day (confirm-assignment) before starting it.",
+      });
+    }
+
+    // Cannot start a day in the future (India date)
+    if (ymd > todayIST()) {
+      return res.status(409).json({
+        success: false,
+        message: `${ymd} is in the future. You can only start today's work or a missed earlier day.`,
+      });
+    }
+
+    // The day and the order status change together or not at all. The row is locked and re-read so a double tap
+    // (or two devices) cannot start the same day twice or overwrite its start time.
+    const outcome = await db.sequelize.transaction(async (t) => {
+      // Lock the order first and re-check its status: a farmer cancelling at this very moment must win, otherwise
+      // the status below would turn a cancelled booking back into a running one.
+      const lockedOrder = await SprayingOrder.findByPk(booking_id, { transaction: t, lock: t.LOCK.UPDATE });
+      if (!lockedOrder || !PILOT_STARTABLE_ORDER_STATUSES.includes(lockedOrder.order_status)) {
+        return { state: "order_closed", order_status: lockedOrder?.order_status };
+      }
+
+      const locked = await SprayingDailyLogs.findByPk(log.id, { transaction: t, lock: t.LOCK.UPDATE });
+      if (!locked.is_active) return { state: "order_closed", order_status: lockedOrder.order_status };
+      const current = getDayStatus(locked);
+      if (current === "completed") return { state: "completed" };
+      if (current === "started") return { state: "already_started", log: locked };
+
+      const now = new Date();
+      await locked.update({
+        verification_comment: JSON.stringify({
+          ...readDayData(locked),
+          day_status: "started",
+          started_at: now.toISOString(),
+        }),
+        modified_on: now,
+      }, { transaction: t });
+
+      const allLogs = await SprayingDailyLogs.findAll({
+        where: { spraying_work_id: booking_id, is_active: true },
+        order: [["working_date", "ASC"]],
+        attributes: ["id"],
+        transaction: t,
+      });
+      const dayNumber = allLogs.findIndex((l) => l.id === locked.id) + 1;
+      await updateOrderStatus(
+        booking_id,
+        OrderStatusEnum.JOB_STARTED,
+        `Pilot started working day ${dayNumber} of ${allLogs.length} (${ymd})`,
+        Number(pilot_user_id),
+        t
+      );
+      return { state: "started", log: locked, dayNumber };
     });
 
-    if (log) {
-      // Update pilot/copilot/drone if needed
-      await log.update({
-        pilot_user_id: pilot_user_id || log.pilot_user_id,
-        co_pilot_user_id: co_pilot_user_id || log.co_pilot_user_id,
-        drone_id: drone_id || log.drone_id,
-        modified_on: new Date(),
+    if (outcome.state === "order_closed") {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot start work while the order is ${outcome.order_status}.`,
+        order_status: outcome.order_status,
       });
+    }
+    if (outcome.state === "completed") {
+      return res.status(409).json({ success: false, message: "This working day is already completed." });
+    }
+    if (outcome.state === "already_started") {
       return res.status(200).json({
         success: true,
-        message: "Day already exists, updated pilot/drone info.",
-        data: log,
+        message: "Day already started.",
+        data: outcome.log,
         isNew: false,
+        day_status: "started",
+        order_status: order.order_status,
       });
     }
 
-    // Create new daily log
-    log = await SprayingDailyLogs.create({
-      spraying_work_id: booking_id,
-      pilot_user_id,
-      co_pilot_user_id: co_pilot_user_id || null,
-      drone_id: drone_id || null,
-      working_date: dateObj,
-      is_verified: false,
-      created_on: new Date(),
-      is_active: true,
-    });
-
-    // Update order status to "in progress" if it was pending
-    if (order.order_status === OrderStatusEnum.ORDER_PLACED || order.order_status === OrderStatusEnum.ORDER_ACCEPTED || order.order_status === OrderStatusEnum.WAITING_FOR_CONFIRMATION) {
-      await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_STARTED, "Pilot started the day", pilot_user_id);
-    }
-
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: "New working day started successfully.",
-      data: log,
+      message: "Working day started successfully.",
+      data: outcome.log,
       isNew: true,
+      day_status: "started",
+      day_number: outcome.dayNumber,
+      order_status: OrderStatusEnum.JOB_STARTED,
     });
   } catch (error) {
-    console.error("Error starting day:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, "startDay");
   }
 };
 
@@ -206,65 +340,49 @@ export const startDay = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 export const updatePilotWorkDetails = async (req, res) => {
   try {
-    const {
-      booking_id,
-      working_date,
-      completed_acres,
-      fertilizer_used,
-      pesticide_used,
-      water_used,
-      notes,
-      start_time,
-      end_time,
-    } = req.body;
+    const { booking_id, working_date } = req.body;
 
     if (!booking_id || !working_date) {
       return res.status(400).json({ success: false, message: "booking_id and working_date are required." });
     }
 
-    // Verify order
+    const dateObj = parseDateOnly(working_date);
+    if (!dateObj) {
+      return res.status(400).json({ success: false, message: "working_date must be a valid date (YYYY-MM-DD)." });
+    }
+
     const order = await SprayingOrder.findByPk(booking_id);
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found." });
     }
 
-    // Normalize date
-    const dateObj = new Date(working_date);
-    dateObj.setUTCHours(0, 0, 0, 0);
-
-    // Find the daily log
     const log = await SprayingDailyLogs.findOne({
-      where: {
-        spraying_work_id: booking_id,
-        working_date: dateObj,
-      },
+      where: { spraying_work_id: booking_id, working_date: dateObj, is_active: true },
     });
-
     if (!log) {
-      return res.status(404).json({ success: false, message: "Daily log not found for this date. Start the day first." });
+      return res.status(404).json({ success: false, message: "Daily log not found for this date." });
     }
 
-    // Build work data JSON
-    const workData = {
-      completed_acres: completed_acres || null,
-      fertilizer_used: fertilizer_used || null,
-      pesticide_used: pesticide_used || null,
-      water_used: water_used || null,
-      notes: notes || null,
-      start_time: start_time || null,
-      end_time: end_time || null,
+    if (log.pilot_user_id !== req.pilot.id) {
+      return res.status(403).json({ success: false, message: "This working day is not assigned to you." });
+    }
+
+    if (getDayStatus(log) !== "started") {
+      return res.status(409).json({
+        success: false,
+        message: "Start the day first (day must be in progress to update work details).",
+        day_status: getDayStatus(log),
+      });
+    }
+
+    const parsed = parseWorkFields(req.body);
+    if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+
+    const mergedData = {
+      ...readDayData(log),
+      ...parsed.fields,
       updated_at: new Date().toISOString(),
     };
-
-    // Merge with existing data if any
-    let existingData = {};
-    try {
-      if (log.verification_comment) {
-        existingData = JSON.parse(log.verification_comment);
-      }
-    } catch { /* not JSON, overwrite */ }
-
-    const mergedData = { ...existingData, ...workData };
 
     await log.update({
       verification_comment: JSON.stringify(mergedData),
@@ -282,8 +400,7 @@ export const updatePilotWorkDetails = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error updating pilot work details:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, "updatePilotWorkDetails");
   }
 };
 
@@ -307,13 +424,14 @@ export const uploadFieldImage = async (req, res) => {
       return res.status(400).json({ success: false, message: "No image file provided." });
     }
 
-    if (file.size > 5 * 1024 * 1024) {
-      return res.status(400).json({ success: false, message: "File size must be less than 5 MB." });
-    }
-
-    const log = await SprayingDailyLogs.findByPk(log_id);
-    if (!log) {
-      return res.status(404).json({ success: false, message: "Daily log not found." });
+    const log = Number.isInteger(Number(log_id)) ? await SprayingDailyLogs.findByPk(log_id) : null;
+    if (!log || log.pilot_user_id !== req.pilot.id) {
+      // multer has already stored the file: do not keep an upload that was refused
+      fs.unlink(file.path, () => {});
+      return res.status(log ? 403 : 404).json({
+        success: false,
+        message: log ? "This working day is not assigned to you." : "Daily log not found.",
+      });
     }
 
     await log.update({
@@ -332,8 +450,8 @@ export const uploadFieldImage = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error uploading field image:", error);
-    res.status(500).json({ success: false, error: error.message });
+    if (req.file?.path) fs.unlink(req.file.path, () => {}); // do not keep an upload whose record failed to save
+    return respondWithError(req, res, error, "uploadFieldImage");
   }
 };
 
@@ -345,89 +463,105 @@ export const uploadFieldImage = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 export const endDay = async (req, res) => {
   try {
-    const {
-      booking_id,
-      working_date,
-      completed_acres,
-      fertilizer_used,
-      pesticide_used,
-      water_used,
-      notes,
-      start_time,
-      end_time,
-    } = req.body;
+    const { booking_id, working_date } = req.body;
 
     if (!booking_id || !working_date) {
       return res.status(400).json({ success: false, message: "booking_id and working_date are required." });
     }
 
-    // Normalize date
-    const dateObj = new Date(working_date);
-    dateObj.setUTCHours(0, 0, 0, 0);
+    const dateObj = parseDateOnly(working_date);
+    if (!dateObj) {
+      return res.status(400).json({ success: false, message: "working_date must be a valid date (YYYY-MM-DD)." });
+    }
 
     const log = await SprayingDailyLogs.findOne({
-      where: {
-        spraying_work_id: booking_id,
-        working_date: dateObj,
-      },
+      where: { spraying_work_id: booking_id, working_date: dateObj, is_active: true },
     });
-
     if (!log) {
       return res.status(404).json({ success: false, message: "Daily log not found for this date." });
     }
 
-    // Build final day summary
-    const dayData = {
-      completed_acres: completed_acres || null,
-      fertilizer_used: fertilizer_used || null,
-      pesticide_used: pesticide_used || null,
-      water_used: water_used || null,
-      notes: notes || null,
-      start_time: start_time || null,
-      end_time: end_time || null,
-      day_status: "completed",
-      saved_at: new Date().toISOString(),
-    };
-
-    await log.update({
-      verification_comment: JSON.stringify(dayData),
-      modified_on: new Date(),
-    });
-
-    // Check if all days are done
-    const allLogs = await SprayingDailyLogs.findAll({
-      where: { spraying_work_id: booking_id },
-    });
-
-    const allDaysComplete = allLogs.every(l => {
-      try {
-        const data = JSON.parse(l.verification_comment || "{}");
-        return data.day_status === "completed";
-      } catch { return false; }
-    });
-
-    // If all days complete, update order status
-    if (allDaysComplete && allLogs.length > 0) {
-      const order = await SprayingOrder.findByPk(booking_id);
-      if (order) {
-        await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_COMPLETED, "All days completed by pilot");
-      }
+    if (log.pilot_user_id !== req.pilot.id) {
+      return res.status(403).json({ success: false, message: "This working day is not assigned to you." });
     }
 
-    res.status(200).json({
+    const previousStatus = getDayStatus(log);
+    if (!["started", "completed"].includes(previousStatus)) {
+      return res.status(409).json({
+        success: false,
+        message: "Start the day before ending it.",
+        day_status: previousStatus,
+      });
+    }
+
+    const parsed = parseWorkFields(req.body);
+    if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+
+    // Saving the day and moving the order status are one unit; the row is locked so a double tap cannot
+    // end the same day twice.
+    const result = await db.sequelize.transaction(async (t) => {
+      const locked = await SprayingDailyLogs.findByPk(log.id, { transaction: t, lock: t.LOCK.UPDATE });
+      const before = getDayStatus(locked);
+      if (!["started", "completed"].includes(before)) return { notStarted: before };
+
+      // Final day summary: keep everything saved so far, add what was sent now
+      const now = new Date();
+      const dayData = {
+        ...readDayData(locked),
+        ...parsed.fields,
+        day_status: "completed",
+        saved_at: now.toISOString(),
+      };
+      await locked.update({
+        verification_comment: JSON.stringify(dayData),
+        modified_on: now,
+      }, { transaction: t });
+
+      // Whole job done only when every scheduled day is completed
+      const allLogs = await SprayingDailyLogs.findAll({
+        where: { spraying_work_id: booking_id, is_active: true },
+        transaction: t,
+      });
+      const allDaysComplete =
+        allLogs.length > 0 && allLogs.every((l) => getDayStatus(l) === "completed");
+
+      // Status moves only the first time this day is ended
+      let orderStatus;
+      if (before === "started") {
+        orderStatus = allDaysComplete ? OrderStatusEnum.ORDER_COMPLETED : OrderStatusEnum.JOB_ENDED;
+        await updateOrderStatus(
+          booking_id,
+          orderStatus,
+          allDaysComplete ? "All days completed by pilot" : `Pilot ended working day ${toYMD(dateObj)}`,
+          locked.pilot_user_id,
+          t
+        );
+      }
+      return { log: locked, dayData, allDaysComplete, orderStatus };
+    });
+
+    if (result.notStarted) {
+      return res.status(409).json({
+        success: false,
+        message: "Start the day before ending it.",
+        day_status: result.notStarted,
+      });
+    }
+
+    return res.status(200).json({
       success: true,
       message: "Day ended and saved successfully.",
       data: {
-        log_id: log.id,
+        log_id: result.log.id,
         booking_id,
-        working_date: log.working_date,
-        day_data: dayData,
-        all_days_complete: allDaysComplete,
+        working_date: result.log.working_date,
+        day_data: result.dayData,
+        all_days_complete: result.allDaysComplete,
+        order_status: result.orderStatus,
       },
     });
   } catch (error) {
-    console.error("Error ending day:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, "endDay");
   }
 };
 
@@ -438,16 +572,29 @@ export const endDay = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 export const addPilotComment = async (req, res) => {
   try {
+    const pilot_user_id = req.pilot.id;
     const {
       booking_id,
-      pilot_user_id,
       comment,
       comment_type,  // e.g. "field_note", "issue", "progress_update"
       working_date,
     } = req.body;
 
-    if (!booking_id || !comment || !pilot_user_id) {
-      return res.status(400).json({ success: false, message: "booking_id, pilot_user_id, and comment are required." });
+    const text = typeof comment === "string" ? comment.trim() : "";
+    if (!booking_id || !text) {
+      return res.status(400).json({ success: false, message: "booking_id and comment are required." });
+    }
+    if (text.length > 1000) {
+      return res.status(400).json({ success: false, message: "The comment must be 1000 characters or fewer." });
+    }
+    const commentDate = working_date ? parseDateOnly(working_date) : new Date();
+    if (!commentDate) {
+      return res.status(400).json({ success: false, message: "working_date must be a valid date (YYYY-MM-DD)." });
+    }
+
+    const assigned = await SprayingDailyLogs.findOne({ where: { spraying_work_id: booking_id, pilot_user_id } });
+    if (!assigned) {
+      return res.status(403).json({ success: false, message: "This booking is not assigned to you." });
     }
 
     // Verify order exists
@@ -458,10 +605,10 @@ export const addPilotComment = async (req, res) => {
 
     const newComment = await SprayingOrderComment.create({
       user_id: pilot_user_id,
-      comment_type: comment_type || "pilot_note",
-      comment,
+      comment_type: String(comment_type || "pilot_note").slice(0, 50),
+      comment: text,
       spraying_order_id: booking_id,
-      working_date: working_date ? new Date(working_date) : new Date(),
+      working_date: commentDate,
       created_by: pilot_user_id,
       created_on: new Date(),
     });
@@ -472,8 +619,7 @@ export const addPilotComment = async (req, res) => {
       data: newComment,
     });
   } catch (error) {
-    console.error("Error adding pilot comment:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, "addPilotComment");
   }
 };
 
@@ -518,7 +664,7 @@ export const confirmAssignment = async (req, res) => {
       });
     }
 
-    const { booking_id, accepted_dates } = req.body;
+    const { booking_id, accepted_dates, accept_all } = req.body;
 
     // ── 2. Validate inputs ───────────────────────────────────────────
     if (!booking_id) {
@@ -528,10 +674,10 @@ export const confirmAssignment = async (req, res) => {
       });
     }
 
-    if (!Array.isArray(accepted_dates)) {
+    if (accept_all !== true && !Array.isArray(accepted_dates)) {
       return res.status(400).json({
         success: false,
-        message: 'accepted_dates must be an array of date strings (YYYY-MM-DD). Send an empty array [] if you accept no dates.',
+        message: 'accepted_dates must be an array of date strings (YYYY-MM-DD), or send accept_all: true. Send an empty array [] if you accept no dates.',
       });
     }
 
@@ -541,6 +687,21 @@ export const confirmAssignment = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Order not found.',
+      });
+    }
+
+    // ── 3b. Closed bookings can no longer be accepted ────────────────
+    const closedStatuses = [
+      OrderStatusEnum.ORDER_CANCELLED,
+      OrderStatusEnum.ORDER_REJECTED,
+      OrderStatusEnum.ORDER_COMPLETED,
+      OrderStatusEnum.WAITING_FOR_PAYMENT,
+      OrderStatusEnum.PAYMENT_SUCCESSFUL,
+    ];
+    if (closedStatuses.includes(order.order_status)) {
+      return res.status(409).json({
+        success: false,
+        message: `This booking is ${order.order_status} and can no longer be accepted.`,
       });
     }
 
@@ -563,6 +724,7 @@ export const confirmAssignment = async (req, res) => {
       where: {
         spraying_work_id: booking_id,
         pilot_user_id,
+        is_active: true,
       },
       order: [['working_date', 'ASC']],
     });
@@ -576,14 +738,20 @@ export const confirmAssignment = async (req, res) => {
 
     // ── 6. Normalize accepted_dates to UTC midnight strings ──────────
     //      e.g. "2026-07-20" → "2026-07-20" (compare with DB dates)
-    const normalizedAccepted = new Set(
-      accepted_dates.map(d => {
-        const dt = new Date(d);
-        if (isNaN(dt.getTime())) return null;
-        // Normalize to YYYY-MM-DD UTC
-        return dt.toISOString().slice(0, 10);
-      }).filter(Boolean)
-    );
+    // accept_all: every day assigned to this pilot that is still open (not started/finished)
+    const datesToAccept = accept_all === true
+      ? pilotLogs.filter(l => ['scheduled', 'confirmed', 'declined'].includes(getDayStatus(l))).map(l => toYMD(l.working_date))
+      : accepted_dates;
+
+    const parsedAccepted = datesToAccept.map(d => ({ raw: d, date: parseDateOnly(d) }));
+    const badAccepted = parsedAccepted.find(x => !x.date);
+    if (badAccepted) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid date in accepted_dates: ${JSON.stringify(badAccepted.raw)}. Use YYYY-MM-DD.`,
+      });
+    }
+    const normalizedAccepted = new Set(parsedAccepted.map(x => toYMD(x.date)));
 
     // ── 7. Validate that all accepted_dates actually belong to this pilot ─
     const assignedDatesSet = new Set(
@@ -599,50 +767,51 @@ export const confirmAssignment = async (req, res) => {
       });
     }
 
-    // ── 8. Apply confirmation per date ───────────────────────────────
+    // ── 8-10. Apply confirmation per date, assignee flag and order status as ONE unit ─
     const now = new Date();
     const results = { accepted: [], pending: [], already_confirmed: [], already_declined: [] };
 
-    await Promise.all(
-      pilotLogs.map(async log => {
-        const logDate = new Date(log.working_date).toISOString().slice(0, 10);
-        const wantsToAccept = normalizedAccepted.has(logDate);
+    const closedNow = await db.sequelize.transaction(async (t) => {
+      // Re-check under a lock: the booking may have been cancelled while this request was in flight
+      const lockedOrder = await SprayingOrder.findByPk(booking_id, { transaction: t, lock: t.LOCK.UPDATE });
+      if (!lockedOrder || closedStatuses.includes(lockedOrder.order_status)) return lockedOrder?.order_status || 'MISSING';
+      order.order_status = lockedOrder.order_status;
 
-        if (wantsToAccept) {
-          // Mark as accepted regardless of previous state
+      for (const log of pilotLogs) {
+        const logDate = new Date(log.working_date).toISOString().slice(0, 10);
+
+        if (normalizedAccepted.has(logDate)) {
+          // Mark as accepted regardless of previous state;
+          // accepting a day the pilot declined earlier removes the "declined" markers
+          const dayData = readDayData(log);
           await log.update({
             is_pilot_confirmed: true,
             pilot_confirmed_at: now,
+            ...(dayData.declined_at && { verification_comment: JSON.stringify(stripDecline(dayData)) }),
             modified_on: now,
-          });
+          }, { transaction: t });
           results.accepted.push(logDate);
-        } else {
-          // Not in accepted list — leave untouched (null = not responded)
-          // but track for the response summary
-          if (log.is_pilot_confirmed === true)       results.already_confirmed.push(logDate);
-          else if (log.is_pilot_confirmed === false)  results.already_declined.push(logDate);
-          else                                        results.pending.push(logDate);
-        }
-      })
-    );
+        } else if (log.is_pilot_confirmed === true) results.already_confirmed.push(logDate);
+        else if (log.is_pilot_confirmed === false) results.already_declined.push(logDate);
+        else results.pending.push(logDate);
+      }
 
-    // ── 9. Update the assignee-level flag ────────────────────────────
-    //      is_pilot_confirm on the assignee row = true if pilot has
-    //      accepted at least one date overall.
-    const hasAnyAccepted = pilotLogs.some(l => {
-      const d = new Date(l.working_date).toISOString().slice(0, 10);
-      return normalizedAccepted.has(d) || l.is_pilot_confirmed === true;
+      // is_pilot_confirm on the assignee row = true if the pilot has accepted at least one date overall
+      const hasAnyAccepted = results.accepted.length > 0 || results.already_confirmed.length > 0;
+      await assignee.update({ is_pilot_confirm: hasAnyAccepted, modified_on: now }, { transaction: t });
+
+      if (hasAnyAccepted &&
+          (order.order_status === OrderStatusEnum.WAITING_FOR_CONFIRMATION || order.order_status === OrderStatusEnum.ORDER_PLACED)) {
+        await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_ACCEPTED, "Pilot confirmed assignment", pilot_user_id, t);
+      }
+      return null;
     });
 
-    await assignee.update({
-      is_pilot_confirm: hasAnyAccepted,
-      modified_on: now,
-    });
-
-    // ── 10. Update order status if pilot confirmed ───────────────────
-    if (hasAnyAccepted &&
-        (order.order_status === OrderStatusEnum.WAITING_FOR_CONFIRMATION || order.order_status === OrderStatusEnum.ORDER_PLACED)) {
-      await updateOrderStatus(booking_id, OrderStatusEnum.ORDER_ACCEPTED, "Pilot confirmed assignment", pilot_user_id);
+    if (closedNow) {
+      return res.status(409).json({
+        success: false,
+        message: `This booking is ${closedNow} and can no longer be accepted.`,
+      });
     }
 
     // ── 11. Build summary of all dates for this pilot ────────────────
@@ -680,8 +849,7 @@ export const confirmAssignment = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error confirming pilot assignment:', error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'confirmAssignment');
   }
 };
 
@@ -699,6 +867,11 @@ export const getPilotOrderDetails = async (req, res) => {
     const order = await SprayingOrder.findByPk(booking_id);
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found." });
+    }
+
+    const assigned = await SprayingDailyLogs.findOne({ where: { spraying_work_id: booking_id, pilot_user_id: req.pilot.id } });
+    if (!assigned) {
+      return res.status(403).json({ success: false, message: "This booking is not assigned to you." });
     }
 
     // Address
@@ -770,7 +943,6 @@ export const getPilotOrderDetails = async (req, res) => {
       } : null,
     });
   } catch (error) {
-    console.error("Error fetching pilot order details:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, "getPilotOrderDetails");
   }
 };
