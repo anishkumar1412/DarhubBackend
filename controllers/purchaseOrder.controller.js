@@ -8,6 +8,7 @@
 
 import db from '../models/index.js';
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { PurchaseOrder, MaintenanceLog, InventoryAccessory, Vendor, InventoryShipment, Op } = db;
 
@@ -104,7 +105,7 @@ export const createPurchaseOrder = async (req, res) => {
     return res.status(201).json({ success: true, data: po, message: 'Purchase Order generated successfully.' });
   } catch (err) {
     console.error('createPurchaseOrder error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'createPurchaseOrder');
   }
 };
 
@@ -152,7 +153,7 @@ export const getAllPurchaseOrders = async (req, res) => {
     });
   } catch (err) {
     console.error('getAllPurchaseOrders error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllPurchaseOrders');
   }
 };
 
@@ -169,7 +170,7 @@ export const getPurchaseOrderById = async (req, res) => {
     return res.status(200).json({ success: true, data: po });
   } catch (err) {
     console.error('getPurchaseOrderById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getPurchaseOrderById');
   }
 };
 
@@ -213,7 +214,7 @@ export const updatePurchaseOrder = async (req, res) => {
     return res.status(200).json({ success: true, data: po, message: 'Purchase Order updated successfully.' });
   } catch (err) {
     console.error('updatePurchaseOrder error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updatePurchaseOrder');
   }
 };
 
@@ -255,7 +256,7 @@ export const updatePOStatus = async (req, res) => {
     return res.status(200).json({ success: true, data: po, message: `PO status updated to '${status}'.` });
   } catch (err) {
     console.error('updatePOStatus error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updatePOStatus');
   }
 };
 
@@ -274,6 +275,6 @@ export const deletePurchaseOrder = async (req, res) => {
     return res.status(200).json({ success: true, message: 'Purchase Order deleted successfully.' });
   } catch (err) {
     console.error('deletePurchaseOrder error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deletePurchaseOrder');
   }
 };

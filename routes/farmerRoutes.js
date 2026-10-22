@@ -2,6 +2,7 @@ import express from 'express';
 import { authenticateAdmin, requireAnyPermission } from '../middleware/adminAuth.middleware.js';
 import { authenticateUser, requireFarmer } from '../middleware/access.js';
 import { validate } from '../middleware/validate.js';
+import { idempotent } from '../middleware/idempotency.js';
 import { idParam } from '../validation/common.js';
 import {
   profileQuerySchema,
@@ -16,6 +17,7 @@ import {
   cancelFarmerBooking,
   rescheduleFarmerBooking,
   getBookingStatuses,
+  getBookingsSyncVersion,
 } from '../controllers/farmerBookingController.js';
 import { getFarmerProfile, updateFarmerProfile } from '../controllers/farmerProfile.controller.js';
 import {
@@ -106,6 +108,13 @@ farmerRouter.delete('/upi/:id', byId, deleteUpi);
 farmerRouter.get('/bookings/statuses', getBookingStatuses);
 
 /**
+ * GET /api/farmer/bookings/sync-version
+ * Lightweight change detector polled by the app's Orders screen: { success, version }.
+ * ⚠️  Also must be registered BEFORE /:booking_id.
+ */
+farmerRouter.get('/bookings/sync-version', getBookingsSyncVersion);
+
+/**
  * GET /api/farmer/bookings
  * Query params:
  *   status  – PENDING | UPCOMING | ONGOING | COMPLETED | CANCELLED  (optional — omit for all)
@@ -135,13 +144,13 @@ farmerRouter.patch('/bookings/:booking_id/rate', byBooking, validate({ body: rat
  * Body: { cancellation_reason: "Bad Weather" }
  * Farmer cancels a PENDING or UPCOMING booking.
  */
-farmerRouter.post('/bookings/:booking_id/cancel', byBooking, validate({ body: cancelBookingSchema }), cancelFarmerBooking);
+farmerRouter.post('/bookings/:booking_id/cancel', byBooking, validate({ body: cancelBookingSchema }), idempotent(), cancelFarmerBooking);
 
 /**
  * PATCH /api/farmer/bookings/:booking_id/reschedule
  * Body: { new_date: "2026-05-28", new_time_window: "10:00 AM - 12:00 PM" }
  * Farmer reschedules an UPCOMING booking (opens RescheduleBookingFragment).
  */
-farmerRouter.patch('/bookings/:booking_id/reschedule', byBooking, validate({ body: rescheduleBookingSchema }), rescheduleFarmerBooking);
+farmerRouter.patch('/bookings/:booking_id/reschedule', byBooking, validate({ body: rescheduleBookingSchema }), idempotent(), rescheduleFarmerBooking);
 
 export default farmerRouter;

@@ -7,6 +7,7 @@
 
 import db from '../models/index.js';
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { InventoryAccessory, Op } = db;
 
@@ -64,7 +65,7 @@ export const createAccessory = async (req, res) => {
     return res.status(201).json({ success: true, data: accessory, message: 'Accessory created successfully.' });
   } catch (err) {
     console.error('createAccessory error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'createAccessory');
   }
 };
 
@@ -121,7 +122,7 @@ export const getAllAccessories = async (req, res) => {
     });
   } catch (err) {
     console.error('getAllAccessories error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllAccessories');
   }
 };
 
@@ -138,7 +139,7 @@ export const getAccessoryById = async (req, res) => {
     return res.status(200).json({ success: true, data: accessory });
   } catch (err) {
     console.error('getAccessoryById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAccessoryById');
   }
 };
 
@@ -186,7 +187,7 @@ export const updateAccessory = async (req, res) => {
     return res.status(200).json({ success: true, data: accessory, message: 'Accessory updated successfully.' });
   } catch (err) {
     console.error('updateAccessory error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updateAccessory');
   }
 };
 
@@ -205,7 +206,7 @@ export const deleteAccessory = async (req, res) => {
     return res.status(200).json({ success: true, message: 'Accessory deleted successfully.' });
   } catch (err) {
     console.error('deleteAccessory error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deleteAccessory');
   }
 };
 
@@ -233,7 +234,7 @@ export const transferAccessory = async (req, res) => {
     return res.status(200).json({ success: true, data: accessory, message: 'Accessory transferred successfully.' });
   } catch (err) {
     console.error('transferAccessory error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'transferAccessory');
   }
 };
 
@@ -286,7 +287,7 @@ export const getLowStockAccessories = async (req, res) => {
     });
   } catch (err) {
     console.error('getLowStockAccessories error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getLowStockAccessories');
   }
 };
 
@@ -324,6 +325,6 @@ export const getAccessoryStats = async (req, res) => {
     });
   } catch (err) {
     console.error('getAccessoryStats error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAccessoryStats');
   }
 };

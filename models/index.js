@@ -21,6 +21,7 @@ import MasterBlock from './MasterBlock.js';
 import MasterBolt from './MasterBolt.js';
 import MasterCharger from './MasterCharger.js';
 import MasterCrop from './MasterCrop.js';
+import ColumnSettings from './ColumnSettings.js';
 import MasterCupon from './MasterCupon.js';
 import MasterDistrict from './MasterDistrict.js';
 import MasterGramPanchayat from './MasterGramPanchayat.js';
@@ -51,6 +52,7 @@ import UserUpiDetails from './UserUpiDetails.js';
 import UserBankDetails from './UserBankDetails.js';
 import UserDocuments from './UserDocuments.js';
 import OtpVerification from './OtpVerification.js';
+import IdempotencyKey from './IdempotencyKey.js';
 
 // ── Inventory & Sales/Purchase Order models (NEW) ───────────────────
 import Category from './Category.js';
@@ -100,7 +102,7 @@ const sequelize = new Sequelize(
     dialect: db1.DIALECT,
     port: db1.port,
     logging: false,
-    dialectOptions: {
+    dialectOptions: db1.SSL === false ? {} : {
       ssl: {
         require: true,
         rejectUnauthorized: false,
@@ -158,6 +160,7 @@ const db = {
   MasterBolt: MasterBolt(sequelize, DataTypes),
   MasterCharger: MasterCharger(sequelize, DataTypes),
   MasterCrop: MasterCrop(sequelize, DataTypes),
+  ColumnSettings: ColumnSettings(sequelize, DataTypes),
   MasterCupon: MasterCupon(sequelize, DataTypes),
   MasterDistrict: MasterDistrict(sequelize, DataTypes),
   MasterGramPanchayat: MasterGramPanchayat(sequelize, DataTypes),
@@ -208,6 +211,7 @@ const db = {
   UserBankDetails: UserBankDetails(sequelize, DataTypes),
   UserDocuments: UserDocuments(sequelize, DataTypes),
   OtpVerification: OtpVerification(sequelize, DataTypes),
+  IdempotencyKey: IdempotencyKey(sequelize, DataTypes),
   // Inventory dashboard models
   InventoryAccessory: InventoryAccessory(sequelize, DataTypes),
   InventoryDrone: InventoryDrone(sequelize, DataTypes),

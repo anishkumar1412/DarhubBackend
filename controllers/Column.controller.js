@@ -1,6 +1,7 @@
 import db from "../models/index.js";
 import { Op } from "sequelize";
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { ColumnSettings, UserProfile } = db;
 
@@ -25,7 +26,7 @@ export const createColumn = async (req, res) => {
     res.status(201).json({ columnId: column.id, message: "Column Succefully created" });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'createColumn');
   }
 };
 
@@ -80,7 +81,7 @@ export const getAllColumns = async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'getAllColumns');
   }
 };
 
@@ -132,7 +133,7 @@ export const getColumnById = async (req, res) => {
       modified_by: modifiedByName,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'getColumnById');
   }
 };
 
@@ -142,14 +143,17 @@ export const updateColumn = async (req, res) => {
     const column = await ColumnSettings.findByPk(req.params.id);
     if (!column) return res.status(404).json({ error: "Column not found" });
 
+    // Only the setting's own fields: spreading the whole body let a request rewrite id / created_by
+    const EDITABLE = ["module", "label", "key", "characters", "is_sortable", "is_filterable", "filter_type", "is_active"];
+    const changes = Object.fromEntries(Object.entries(req.body || {}).filter(([k]) => EDITABLE.includes(k)));
     await column.update({
-      ...req.body,
-      modified_by: req.user?.id || null,   // 👈 added
+      ...changes,
+      modified_by: req.user?.id || null,
       modified_on: new Date()
     });
     res.json({ succuss: true, message: "Successfully updated" });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'updateColumn');
   }
 };
 
@@ -162,7 +166,7 @@ export const deleteColumn = async (req, res) => {
     await column.destroy();
     res.json({ message: "Column deleted successfully" });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'deleteColumn');
   }
 };
 
@@ -238,6 +242,6 @@ export const filterColumns = async (req, res) => {
       data: result,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'filterColumns');
   }
 };

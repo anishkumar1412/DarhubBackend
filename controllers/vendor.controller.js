@@ -2,6 +2,7 @@ import db from '../models/index.js';
 import { uploadToCloudinary } from '../middleware/upload.js';
 import cloudinary from 'cloudinary';
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const {
   Vendor,
@@ -214,7 +215,7 @@ export const createVendor = async (req, res) => {
   } catch (err) {
     await t.rollback();
     console.error('createVendor error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'createVendor');
   }
 };
 
@@ -257,7 +258,7 @@ export const getAllVendors = async (req, res) => {
     });
   } catch (err) {
     console.error('getAllVendors error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'getAllVendors');
   }
 };
 
@@ -288,7 +289,7 @@ export const getVendorById = async (req, res) => {
     });
   } catch (err) {
     console.error('getVendorById error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'getVendorById');
   }
 };
 
@@ -530,7 +531,7 @@ export const updateVendor = async (req, res) => {
   } catch (err) {
     await t.rollback();
     console.error('updateVendor error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'updateVendor');
   }
 };
 
@@ -610,6 +611,6 @@ export const deleteVendor = async (req, res) => {
   } catch (err) {
     await t.rollback();
     console.error('deleteVendor error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'deleteVendor');
   }
 };

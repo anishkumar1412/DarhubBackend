@@ -3,6 +3,7 @@ import { Op } from "sequelize";
 import cloudinary from "cloudinary";
 import { uploadToCloudinary } from "../middleware/upload.js";
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { Fertilizer } = db;
 
@@ -63,7 +64,7 @@ export const createFertilizer = async (req, res) => {
     res.status(201).json({ success: true, data: fertilizer, message: "Fertilizer created successfully" });
   } catch (error) {
     console.error("Create fertilizer error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createFertilizer');
   }
 };
 
@@ -132,7 +133,7 @@ export const getAllFertilizers = async (req, res) => {
     });
   } catch (error) {
     console.error("Get fertilizers error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getAllFertilizers');
   }
 };
 
@@ -149,7 +150,7 @@ export const getFertilizerById = async (req, res) => {
     res.json({ success: true, data: fertilizer });
   } catch (error) {
     console.error("Get fertilizer by ID error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getFertilizerById');
   }
 };
 
@@ -232,7 +233,7 @@ export const updateFertilizer = async (req, res) => {
     res.json({ success: true, data: fertilizer, message: "Fertilizer updated successfully" });
   } catch (error) {
     console.error("Update fertilizer error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updateFertilizer');
   }
 };
 
@@ -255,6 +256,6 @@ export const deleteFertilizer = async (req, res) => {
     res.json({ success: true, message: "Fertilizer deleted successfully" });
   } catch (error) {
     console.error("Delete fertilizer error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteFertilizer');
   }
 };

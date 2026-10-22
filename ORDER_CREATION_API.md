@@ -109,3 +109,29 @@ Once the farmer selects the Date, Crop, Land size, and Address, you submit the o
 }
 ```
 *Note: The new booking will instantly appear in `GET /api/farmer/bookings?status=PENDING` after creation!*
+
+### Number of days
+The server decides `num_of_days` from the admin's working-days bands (`/working-days`); the response returns it with
+`start_date` and `end_date`. Acreage between two bands (5.5 acres, or a gap such as 20 to 24) takes the next band up;
+acreage above the largest band is extrapolated from it. A booking that would need more than 60 working days is refused:
+
+```json
+{ "success": false, "code": "BOOKING_TOO_LARGE", "message": "1000 acres needs 229 working days, more than the 60-day maximum for one booking. ..." }
+```
+
+### Idempotency-Key (send it from every client)
+Send a random UUID in the `Idempotency-Key` header. Re-send the **same key** when you retry the **same booking**
+(double tap, timeout, dropped connection); create a **new key** for a new or changed booking.
+
+| Situation | Response |
+|---|---|
+| First request | Runs normally (201). The response is kept for 24 h. |
+| Same key, same body | The first response again, with header `Idempotent-Replayed: true`. No second booking. |
+| Same key while the first copy is still running | `409` `IDEMPOTENCY_REQUEST_IN_PROGRESS` with `Retry-After` (seconds): wait and resend. |
+| Same key, different body | `422` `IDEMPOTENCY_KEY_REUSED`: use a new key. |
+| Invalid key (not 8-255 of `A-Z a-z 0-9 - _ . :`) | `400` `INVALID_IDEMPOTENCY_KEY` |
+
+Keys are per user and per endpoint. A `5xx` (and a retryable `408/409/425/429`) is not kept, so the same key can be
+retried. The same header is accepted by `POST /api/farmer/bookings/:id/cancel`, `PATCH /api/farmer/bookings/:id/reschedule`
+and `POST /order/assign-work/:id`. Requests without the header still work; set `IDEMPOTENCY_KEY_REQUIRED=true` on the
+server to make it mandatory for create-order once every app version in use sends it.

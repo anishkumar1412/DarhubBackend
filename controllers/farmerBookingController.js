@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Op } from 'sequelize';
 import db from '../models/index.js';
 import { OrderStatusEnum } from '../utils/enums.js';
@@ -575,7 +576,9 @@ const buildFullDetail = async (order) => {
 //  numbers were not unique and could be changed without proof, so any farmer could see, cancel and reschedule
 //  other people's bookings (on the dev database ~15 accounts could see one farmer's orders this way).
 // ─────────────────────────────────────────────────────────────────────────────
+// is_active: an order an admin deleted (a soft delete) is no longer the farmer's to see or change
 const ownedBy = (farmerUserId) => ({
+  is_active: true,
   [Op.or]: [{ user_id: farmerUserId }, { created_by: farmerUserId }],
 });
 
@@ -1091,4 +1094,63 @@ export const getBookingStatuses = async (req, res) => {
       { key: 'CANCELLED', label: 'Cancelled', order: 5 },
     ],
   });
+};
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  GET /api/farmer/bookings/sync-version
+//
+//  Cheap change detector for the app's Orders screen (it polls this instead of re-downloading the list).
+//  Returns an opaque `version` string: it changes whenever anything the booking list shows changes (a new booking,
+//  a status change, a pilot/drone assignment, a reschedule, a day being completed or confirmed).
+//  Only narrow columns are read, no joins and no related lookups, so a poll costs a handful of tiny indexed queries.
+// ═════════════════════════════════════════════════════════════════════════════
+export const getBookingsSyncVersion = async (req, res) => {
+  try {
+    const farmer_user_id = req.user?.id;
+    if (!farmer_user_id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const orders = await SprayingOrder.findAll({
+      where: ownedBy(farmer_user_id),
+      attributes: ['booking_id', 'order_status', 'start_date', 'end_date', 'num_of_days', 'total_price', 'is_paid', 'modified_on'],
+      order: [['booking_id', 'ASC']],
+      raw: true,
+    });
+
+    const hash = createHash('sha1');
+    hash.update(JSON.stringify(orders));
+
+    if (orders.length) {
+      const bookingIds = orders.map((o) => o.booking_id);
+      const [timeline, assignees, logs, extras] = await Promise.all([
+        SprayingOrderTimeline.count({ where: { booking_id: bookingIds } }),
+        SprayingWorkAssignee.findAll({
+          where: { booking_id: bookingIds },
+          attributes: ['booking_id', 'pilot_user_id', 'drone_id', 'created_on'],
+          order: [['booking_id', 'ASC'], ['created_on', 'ASC']],
+          raw: true,
+        }),
+        SprayingDailyLogs.findAll({
+          where: { spraying_work_id: bookingIds },
+          attributes: ['id', 'is_active', 'working_date', 'verification_comment', 'is_pilot_confirmed'],
+          order: [['id', 'ASC']],
+          raw: true,
+        }),
+        SprayingOrderExtras.findAll({
+          where: { booking_id: bookingIds },
+          attributes: ['booking_id', 'modified_on', 'cancellation_reason'],
+          order: [['booking_id', 'ASC']],
+          raw: true,
+        }),
+      ]);
+      hash.update(JSON.stringify([timeline, assignees, logs, extras]));
+    }
+
+    res.set('Cache-Control', 'no-store');
+    return res.status(200).json({ success: true, version: hash.digest('hex').slice(0, 16) });
+  } catch (error) {
+    return respondWithError(req, res, error, 'getBookingsSyncVersion');
+  }
 };

@@ -338,10 +338,15 @@ export const getCalendarAvailability = async (req, res) => {
       dronesWithCrew.length > 0
         ? Math.min(...dronesWithCrew.map((d) => d.acres_per_day))
         : 5;
+    // The booking already carries the duration quoted to the farmer (working-days rule). Suggest exactly that:
+    // deriving it from acres / drone capacity here made the Assign modal shorten a 2-day booking to 1 day
+    // while the price stayed the same. The acres-based figure is only a fallback for bookings without a duration.
     const globalEstimated =
-      landInAcres > 0
-        ? Math.ceil(landInAcres / minAcresPerDay)
-        : booking.num_of_days || 1;
+      booking.num_of_days > 0
+        ? booking.num_of_days
+        : landInAcres > 0
+          ? Math.ceil(landInAcres / minAcresPerDay)
+          : 1;
 
     return res.status(200).json({
       success: true,
@@ -357,7 +362,7 @@ export const getCalendarAvailability = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in getCalendarAvailability:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'getCalendarAvailability');
   }
 };
 
@@ -686,7 +691,7 @@ export const updateDailyLogDrone = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in updateDailyLogDrone:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'updateDailyLogDrone');
   }
 };
 
@@ -855,6 +860,6 @@ export const getDroneAvailabilityForBooking = async (req, res) => {
 
   } catch (error) {
     console.error("Error in getDroneAvailabilityForBooking:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'getDroneAvailabilityForBooking');
   }
 };

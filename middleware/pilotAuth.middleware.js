@@ -72,6 +72,7 @@ export const authenticatePilot = async (req, res, next) => {
       email: user.email,
       mobile: user.mobile_number,
     };
+    req.user = { id: user.id, email: user.email };   // what handlers and the audit fields (created_by) read
 
     return next();
   } catch (err) {

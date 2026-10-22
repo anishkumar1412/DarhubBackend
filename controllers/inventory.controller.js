@@ -1,6 +1,7 @@
 import { Op } from "sequelize";
 import db from "../models/index.js";
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const {
   InventoryAccessory,
@@ -44,7 +45,7 @@ export const createAccessory = async (req, res) => {
     return res.status(201).json({ success: true, message: "Accessory created successfully", data: item });
   } catch (error) {
     console.error("Error in createAccessory:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createAccessory');
   }
 };
 
@@ -65,7 +66,7 @@ export const updateAccessory = async (req, res) => {
     return res.status(200).json({ success: true, message: "Accessory updated successfully", data: item });
   } catch (error) {
     console.error("Error in updateAccessory:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updateAccessory');
   }
 };
 
@@ -76,7 +77,7 @@ export const deleteAccessory = async (req, res) => {
     await item.update({ is_active: false, modified_on: new Date() });
     return res.status(200).json({ success: true, message: "Accessory deleted successfully" });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteAccessory');
   }
 };
 
@@ -86,7 +87,7 @@ export const getAccessoryById = async (req, res) => {
     if (!item) return res.status(404).json({ success: false, message: "Accessory not found" });
     return res.status(200).json({ success: true, data: item });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getAccessoryById');
   }
 };
 
@@ -130,7 +131,7 @@ export const filterAccessories = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in filterAccessories:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'filterAccessories');
   }
 };
 
@@ -164,7 +165,7 @@ export const createInventoryDrone = async (req, res) => {
     return res.status(201).json({ success: true, message: "Inventory drone created successfully", data: item });
   } catch (error) {
     console.error("Error in createInventoryDrone:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createInventoryDrone');
   }
 };
 
@@ -185,7 +186,7 @@ export const updateInventoryDrone = async (req, res) => {
     return res.status(200).json({ success: true, message: "Inventory drone updated successfully", data: item });
   } catch (error) {
     console.error("Error in updateInventoryDrone:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updateInventoryDrone');
   }
 };
 
@@ -196,7 +197,7 @@ export const deleteInventoryDrone = async (req, res) => {
     await item.update({ is_active: false, modified_on: new Date() });
     return res.status(200).json({ success: true, message: "Inventory drone deleted successfully" });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteInventoryDrone');
   }
 };
 
@@ -206,7 +207,7 @@ export const getInventoryDroneById = async (req, res) => {
     if (!item) return res.status(404).json({ success: false, message: "Inventory drone not found" });
     return res.status(200).json({ success: true, data: item });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getInventoryDroneById');
   }
 };
 
@@ -251,7 +252,7 @@ export const filterInventoryDrones = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in filterInventoryDrones:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'filterInventoryDrones');
   }
 };
 
@@ -308,7 +309,7 @@ export const getLowStockItems = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in getLowStockItems:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getLowStockItems');
   }
 };
 
@@ -349,7 +350,7 @@ export const createShipment = async (req, res) => {
     return res.status(201).json({ success: true, message: "Shipment created successfully", data: item });
   } catch (error) {
     console.error("Error in createShipment:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createShipment');
   }
 };
 
@@ -374,7 +375,7 @@ export const updateShipment = async (req, res) => {
     return res.status(200).json({ success: true, message: "Shipment updated successfully", data: item });
   } catch (error) {
     console.error("Error in updateShipment:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updateShipment');
   }
 };
 
@@ -385,7 +386,7 @@ export const deleteShipment = async (req, res) => {
     await item.update({ is_active: false, modified_on: new Date() });
     return res.status(200).json({ success: true, message: "Shipment deleted successfully" });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteShipment');
   }
 };
 
@@ -395,7 +396,7 @@ export const getShipmentById = async (req, res) => {
     if (!item) return res.status(404).json({ success: false, message: "Shipment not found" });
     return res.status(200).json({ success: true, data: item });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getShipmentById');
   }
 };
 
@@ -439,7 +440,7 @@ export const filterShipments = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in filterShipments:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'filterShipments');
   }
 };
 
@@ -497,7 +498,7 @@ export const createMaintenanceLog = async (req, res) => {
     return res.status(201).json({ success: true, message: "Maintenance log created successfully", data: item });
   } catch (error) {
     console.error("Error in createMaintenanceLog:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createMaintenanceLog');
   }
 };
 
@@ -515,7 +516,7 @@ export const updateMaintenanceLog = async (req, res) => {
     return res.status(200).json({ success: true, message: "Maintenance log updated successfully", data: item });
   } catch (error) {
     console.error("Error in updateMaintenanceLog:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updateMaintenanceLog');
   }
 };
 
@@ -526,7 +527,7 @@ export const deleteMaintenanceLog = async (req, res) => {
     await item.update({ is_active: false, modified_on: new Date() });
     return res.status(200).json({ success: true, message: "Maintenance log deleted successfully" });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteMaintenanceLog');
   }
 };
 
@@ -553,7 +554,7 @@ export const getMaintenanceLogById = async (req, res) => {
     
     return res.status(200).json({ success: true, data: data });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getMaintenanceLogById');
   }
 };
 
@@ -616,7 +617,7 @@ export const filterMaintenanceLogs = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in filterMaintenanceLogs:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'filterMaintenanceLogs');
   }
 };
 
@@ -667,7 +668,7 @@ export const createPurchaseOrder = async (req, res) => {
     return res.status(201).json({ success: true, message: "Purchase order created successfully", data: item });
   } catch (error) {
     console.error("Error in createPurchaseOrder:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createPurchaseOrder');
   }
 };
 
@@ -697,7 +698,7 @@ export const updatePurchaseOrder = async (req, res) => {
     return res.status(200).json({ success: true, message: "Purchase order updated successfully", data: item });
   } catch (error) {
     console.error("Error in updatePurchaseOrder:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updatePurchaseOrder');
   }
 };
 
@@ -707,7 +708,7 @@ export const getPurchaseOrderById = async (req, res) => {
     if (!item) return res.status(404).json({ success: false, message: "Purchase order not found" });
     return res.status(200).json({ success: true, data: item });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getPurchaseOrderById');
   }
 };
 
@@ -749,7 +750,7 @@ export const filterPurchaseOrders = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in filterPurchaseOrders:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'filterPurchaseOrders');
   }
 };
 
@@ -838,6 +839,6 @@ export const getDashboardStats = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in getDashboardStats:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getDashboardStats');
   }
 };

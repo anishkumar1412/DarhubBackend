@@ -11,6 +11,7 @@
 
 import db from '../models/index.js';
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { MaintenanceLog, SalesOrder, PilotMaintenanceAttachment, PilotMaintenanceChecklist, Op } = db;
 
@@ -87,7 +88,7 @@ export const createMaintenanceLog = async (req, res) => {
     return res.status(201).json({ success: true, data: log, message: 'Maintenance log created successfully.' });
   } catch (err) {
     console.error('createMaintenanceLog error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'createMaintenanceLog');
   }
 };
 
@@ -188,7 +189,7 @@ export const getAllMaintenanceLogs = async (req, res) => {
     });
   } catch (err) {
     console.error('getAllMaintenanceLogs error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllMaintenanceLogs');
   }
 };
 
@@ -236,7 +237,7 @@ export const getMaintenanceLogById = async (req, res) => {
     });
   } catch (err) {
     console.error('getMaintenanceLogById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getMaintenanceLogById');
   }
 };
 
@@ -273,7 +274,7 @@ export const updateMaintenanceLog = async (req, res) => {
     return res.status(200).json({ success: true, data: log, message: 'Maintenance log updated successfully.' });
   } catch (err) {
     console.error('updateMaintenanceLog error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updateMaintenanceLog');
   }
 };
 
@@ -306,7 +307,7 @@ export const updateMaintenanceStatus = async (req, res) => {
     return res.status(200).json({ success: true, data: log, message: `Status updated to '${status}'.` });
   } catch (err) {
     console.error('updateMaintenanceStatus error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updateMaintenanceStatus');
   }
 };
 
@@ -325,7 +326,7 @@ export const deleteMaintenanceLog = async (req, res) => {
     return res.status(200).json({ success: true, message: 'Maintenance log deleted successfully.' });
   } catch (err) {
     console.error('deleteMaintenanceLog error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deleteMaintenanceLog');
   }
 };
 
@@ -353,7 +354,7 @@ export const getMaintenanceStats = async (req, res) => {
     });
   } catch (err) {
     console.error('getMaintenanceStats error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getMaintenanceStats');
   }
 };
 
@@ -453,7 +454,7 @@ export const getAllPilotMaintenanceTasks = async (req, res) => {
     });
   } catch (err) {
     console.error('getAllPilotMaintenanceTasks error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllPilotMaintenanceTasks');
   }
 };
 
@@ -502,7 +503,7 @@ export const getPilotMaintenanceTaskById = async (req, res) => {
     return res.status(200).json({ success: true, data: task });
   } catch (err) {
     console.error('getPilotMaintenanceTaskById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getPilotMaintenanceTaskById');
   }
 };
 
@@ -549,6 +550,6 @@ export const getPilotMaintenanceStats = async (req, res) => {
     });
   } catch (err) {
     console.error('getPilotMaintenanceStats error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getPilotMaintenanceStats');
   }
 };

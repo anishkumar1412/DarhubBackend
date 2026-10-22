@@ -1,6 +1,7 @@
 import db from "../models/index.js";
 import { Op } from "sequelize";
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { Warehouse, WarehouseLocation, WarehouseAdditional } = db;
 
@@ -143,7 +144,7 @@ export const createWarehouse = async (req, res) => {
     });
   } catch (error) {
     console.error("Create Warehouse Error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createWarehouse');
   }
 };
 
@@ -225,7 +226,7 @@ export const getAllWarehouses = async (req, res) => {
     });
   } catch (error) {
     console.error("Get All Warehouses Error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getAllWarehouses');
   }
 };
 
@@ -260,7 +261,7 @@ export const getWarehouseById = async (req, res) => {
     });
   } catch (error) {
     console.error("Get Warehouse By ID Error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getWarehouseById');
   }
 };
 
@@ -422,7 +423,7 @@ export const updateWarehouse = async (req, res) => {
     });
   } catch (error) {
     console.error("Update Warehouse Error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updateWarehouse');
   }
 };
 
@@ -469,6 +470,6 @@ export const deleteWarehouse = async (req, res) => {
     });
   } catch (error) {
     console.error("Delete Warehouse Error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteWarehouse');
   }
 };

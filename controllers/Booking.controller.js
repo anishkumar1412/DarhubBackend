@@ -158,7 +158,7 @@ const {
 
 //   } catch (error) {
 //     console.error("Error updating order:", error);
-//     res.status(500).json({ error: error.message });
+//     return respondWithError(req, res, error, 'updateOrder');
 //   }
 // };
 
@@ -308,7 +308,7 @@ const {
 
 //   } catch (error) {
 //     console.error("Error updating order:", error);
-//     res.status(500).json({ error: error.message });
+//     return respondWithError(req, res, error, 'updateOrder');
 //   }
 // };
 
@@ -462,7 +462,7 @@ const {
 
 //   } catch (error) {
 //     console.error("Error updating order:", error);
-//     res.status(500).json({ error: error.message });
+//     return respondWithError(req, res, error, 'updateOrder');
 //   }
 // };
 
@@ -638,7 +638,7 @@ export const updateOrder = async (req, res) => {
 
   } catch (error) {
     console.error("Error updating order:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'updateOrder');
   }
 };
 
@@ -691,10 +691,7 @@ export const createComment = async (req, res) => {
 
   } catch (error) {
     console.error("Error creating comment:", error);
-    res.status(500).json({
-      message: "Failed to create comment",
-      error: error.message,
-    });
+    return respondWithError(req, res, error, 'createComment');
   }
 };
 
@@ -705,7 +702,7 @@ export const getAllComments = async (req, res) => {
     const comments = await SprayingOrderComment.findAll();
     res.status(200).json(comments);
   } catch (error) {
-    res.status(500).json({ message: "Failed to fetch comments", error: error.message });
+    return respondWithError(req, res, error, 'getAllComments');
   }
 };
 
@@ -720,7 +717,7 @@ export const getCommentById = async (req, res) => {
 
     res.status(200).json(comment);
   } catch (error) {
-    res.status(500).json({ message: "Failed to fetch comment", error: error.message });
+    return respondWithError(req, res, error, 'getCommentById');
   }
 };
 
@@ -758,10 +755,7 @@ export const updateComment = async (req, res) => {
       data: existingComment,
     });
   } catch (error) {
-    res.status(500).json({
-      message: "Failed to update comment",
-      error: error.message,
-    });
+    return respondWithError(req, res, error, 'updateComment');
   }
 };
 
@@ -778,7 +772,7 @@ export const deleteComment = async (req, res) => {
     await comment.destroy();
     res.status(200).json({ message: "Comment deleted successfully" });
   } catch (error) {
-    res.status(500).json({ message: "Failed to delete comment", error: error.message });
+    return respondWithError(req, res, error, 'deleteComment');
   }
 };
 
@@ -880,10 +874,7 @@ export const filterComments = async (req, res) => {
     });
   } catch (error) {
     console.error("Error filtering comments:", error);
-    res.status(500).json({
-      message: "Failed to filter comments",
-      error: error.message,
-    });
+    return respondWithError(req, res, error, 'filterComments');
   }
 };
 
@@ -1015,11 +1006,7 @@ export const SprayingDailyLogsFilter = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("SprayingDailyLogsFilter error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error"
-    });
+    return respondWithError(req, res, error, "SprayingDailyLogsFilter");
   }
 };
 
@@ -1181,7 +1168,7 @@ export const getOrderById = async (req, res) => {
     res.status(200).json(fullOrder);
   } catch (error) {
     console.error("Error fetching order:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'getOrderById');
   }
 };
 
@@ -1334,7 +1321,7 @@ export const getOrdersByUserId = async (req, res) => {
 
   } catch (error) {
     console.error("Error fetching orders by user:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'getOrdersByUserId');
   }
 };
 
@@ -1377,6 +1364,7 @@ export const filterOrders = async (req, res) => {
     if (filters.booking_id) orderWhere.booking_id = String(filters.booking_id);
     if (filters.is_paid !== undefined) orderWhere.is_paid = filters.is_paid;
     if (filters.is_active !== undefined) orderWhere.is_active = filters.is_active;
+    if (!req.auth?.isAdmin) orderWhere.is_active = true;      // deleted (soft) orders are only visible to admins
     if (filters.order_status) orderWhere.order_status = { [Op.iLike]: likePattern(filters.order_status) };
 
     // Booking ids the filters below allow (null: no restriction yet)
@@ -1763,7 +1751,7 @@ export const getAvailablePilotsForDates = async (req, res) => {
  
   } catch (error) {
     console.error("Error in getAvailablePilotsForDates:", error);
-    return res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'getAvailablePilotsForDates');
   }
 };
 
@@ -1775,6 +1763,6 @@ export const getAllOrderStatuses = (req, res) => {
     }));
     res.status(200).json({ success: true, statuses });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getAvailablePilotsForDates');
   }
 };

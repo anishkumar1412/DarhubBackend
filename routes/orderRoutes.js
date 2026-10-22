@@ -30,6 +30,8 @@ import {
 } from "../controllers/availabilityController.js";
 import { authenticateAdmin } from "../middleware/adminAuth.middleware.js";
 import { authenticateUser, requireSelfOrAdmin, scopeBodyToCaller } from "../middleware/access.js";
+import { idempotent } from "../middleware/idempotency.js";
+import env from "../config/env.js";
 
 const orderRouter = express.Router();
 
@@ -39,9 +41,12 @@ const orderRouter = express.Router();
 // Every route here used to be callable by anyone without logging in.
 const asUser = authenticateUser;
 const asAdmin = authenticateAdmin;
+// Idempotency-Key (see middleware/idempotency.js): a retried or double-tapped request returns the first result
+// instead of creating a second booking / assignment
+const onceOnly = idempotent({ required: env.IDEMPOTENCY_KEY_REQUIRED });
 
 // ── Orders: farmer or admin ──────────────────────────────────────────
-orderRouter.post("/create-order",             asUser, createOrder);
+orderRouter.post("/create-order",             asUser, onceOnly, createOrder);
 orderRouter.get("/statuses",                  asUser, getAllOrderStatuses);
 orderRouter.post("/filterOrder",              asUser, scopeBodyToCaller, filterOrders);      // farmers only ever see their own
 orderRouter.get("/getOrderByUserId/:user_id", asUser, requireSelfOrAdmin("user_id"), getOrdersByUserId);
@@ -64,7 +69,7 @@ orderRouter.post("/calendar-availability", asAdmin, getCalendarAvailability);
 orderRouter.post("/drone-availability", asUser, getDroneAvailabilityForBooking);
 
 // Step 2a — New assignment (or add more dates to existing)
-orderRouter.post("/assign-work/:booking_id", asAdmin, assignWork);
+orderRouter.post("/assign-work/:booking_id", asAdmin, idempotent(), assignWork);
 
 // Step 2b — Edit one specific day's drone (change drone mid-schedule)
 orderRouter.patch("/daily-log/:log_id/drone", asAdmin, updateDailyLogDrone);

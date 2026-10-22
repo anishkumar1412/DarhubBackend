@@ -4,10 +4,11 @@ import { fileURLToPath } from 'url';
 import Joi from 'joi';
 import logger from '../utils/logger.js';
 
-// Resolve .env relative to THIS file (config/env.js → project root)
+// Resolve .env relative to THIS file (config/env.js → project root). ENV_FILE points elsewhere, e.g. a test setup
+// against a local database: ENV_FILE=.env.test node server.js
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-const envPath    = path.resolve(__dirname, '../.env');
+const envPath    = process.env.ENV_FILE ? path.resolve(process.env.ENV_FILE) : path.resolve(__dirname, '../.env');
 
 dotenv.config({ path: envPath });
 
@@ -19,12 +20,11 @@ const envSchema = Joi.object({
   DB_NAME:     Joi.string().required(),
   DB_PORT:     Joi.number().default(5432),
   DB_DIALECT:  Joi.string().valid('mysql', 'postgres', 'sqlite', 'mariadb', 'mssql').required(),
+  DB_SSL:      Joi.boolean().default(true),   // false only for a local database without TLS (tests)
 
   // ── App ───────────────────────────────────────────────────────
   PORT:     Joi.number().default(5678),
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
-  // Set to true to return OTPs in API responses regardless of NODE_ENV (testing on deployed servers)
-  EXPOSE_OTP: Joi.boolean().optional(),
 
   // ── JWT ───────────────────────────────────────────────────────
   JWT_SECRET:         Joi.string().required(),
@@ -38,10 +38,7 @@ const envSchema = Joi.object({
   ADMIN_SETUP_EXPIRY_HOURS: Joi.number().default(24),
   ADMIN_RESET_EXPIRY_HOURS: Joi.number().default(1),
 
-  // ── Email ─────────────────────────────────────────────────────
-  // Option A (recommended on Render free tier): Resend API key — uses HTTPS, no SMTP ports needed.
-  RESEND_API_KEY: Joi.string().optional(),
-  // Option B: direct SMTP (works locally; Render free tier blocks ports 25/465/587).
+  // ── Email / SMTP ─────────────────────────────────────────────
   SMTP_HOST:          Joi.string().optional(),
   SMTP_PORT:          Joi.number().default(587),
   SMTP_USER:          Joi.string().optional(),
@@ -73,6 +70,8 @@ const envSchema = Joi.object({
   RATE_LIMIT_MAX: Joi.number().integer().min(10).default(1000), // requests per user/IP per 15 minutes
   CORS_ORIGINS:   Joi.string().allow('').optional(),          // extra allowed browser origins, comma separated
   DB_SYNC_ALTER:  Joi.boolean().optional(),                   // run `sync({ alter: true })` on boot (never by default in production)
+  // Refuse booking requests without an Idempotency-Key header. Leave off until every app version in use sends one.
+  IDEMPOTENCY_KEY_REQUIRED: Joi.boolean().default(false),
 
   // ── Cloudinary ───────────────────────────────────────────────
   CLOUD_SECRET: Joi.string().optional(),
@@ -100,6 +99,7 @@ const env = {
   DB_NAME:     envVars.DB_NAME,
   DB_PORT:     envVars.DB_PORT,
   DB_DIALECT:  envVars.DB_DIALECT,
+  DB_SSL:      envVars.DB_SSL,
 
   // ── App ───────────────────────────────────────────────────────
   PORT:     envVars.PORT,
@@ -117,8 +117,7 @@ const env = {
   ADMIN_SETUP_EXPIRY_HOURS: envVars.ADMIN_SETUP_EXPIRY_HOURS,
   ADMIN_RESET_EXPIRY_HOURS: envVars.ADMIN_RESET_EXPIRY_HOURS,
 
-  // ── Email ─────────────────────────────────────────────────────
-  RESEND_API_KEY:     envVars.RESEND_API_KEY,
+  // ── Email / SMTP ─────────────────────────────────────────────
   SMTP_HOST:          envVars.SMTP_HOST,
   SMTP_PORT:          envVars.SMTP_PORT,
   SMTP_USER:          envVars.SMTP_USER,
@@ -132,7 +131,7 @@ const env = {
   SMS_PROVIDER:    envVars.SMS_PROVIDER ?? (envVars.NODE_ENV === 'production' ? 'none' : 'console'),
   // NODE_ENV=development: the generated OTPs are returned in the API response (no mailbox / SMS gateway needed).
   // Any other value (production, test): OTPs are only delivered by email / SMS and never appear in a response.
-  EXPOSE_DEV_OTPS: envVars.NODE_ENV === 'development' || envVars.EXPOSE_OTP === true,
+  EXPOSE_DEV_OTPS: envVars.NODE_ENV === 'development',
   OTP: {
     expirySeconds: envVars.OTP_EXPIRY_SECONDS,
     resendSeconds: envVars.OTP_RESEND_COOLDOWN_SECONDS,
@@ -151,6 +150,7 @@ const env = {
   RATE_LIMIT_MAX: envVars.RATE_LIMIT_MAX,
   CORS_ORIGINS:   (envVars.CORS_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean),
   DB_SYNC_ALTER:  envVars.DB_SYNC_ALTER,
+  IDEMPOTENCY_KEY_REQUIRED: envVars.IDEMPOTENCY_KEY_REQUIRED,
 
   // ── Cloudinary ───────────────────────────────────────────────
   CLOUD_SECRET: envVars.CLOUD_SECRET,

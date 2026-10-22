@@ -777,7 +777,12 @@ export const confirmAssignment = async (req, res) => {
       if (!lockedOrder || closedStatuses.includes(lockedOrder.order_status)) return lockedOrder?.order_status || 'MISSING';
       order.order_status = lockedOrder.order_status;
 
-      for (const log of pilotLogs) {
+      // Re-read the day rows under a lock: a decline (or start) that ran a moment ago would otherwise be overwritten
+      // with the stale copies loaded before this transaction began.
+      const freshLogs = await SprayingDailyLogs.findAll({
+        where: { id: pilotLogs.map((l) => l.id) }, order: [['working_date', 'ASC']], transaction: t, lock: t.LOCK.UPDATE,
+      });
+      for (const log of freshLogs) {
         const logDate = new Date(log.working_date).toISOString().slice(0, 10);
 
         if (normalizedAccepted.has(logDate)) {

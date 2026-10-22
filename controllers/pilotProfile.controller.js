@@ -1,4 +1,5 @@
 import db from '../models/index.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 export const getPilotProfile = async (req, res) => {
   try {
@@ -164,6 +165,6 @@ export const getPilotProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching pilot profile:', error);
-    return res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
+    return respondWithError(req, res, error, 'getPilotProfile');
   }
 };

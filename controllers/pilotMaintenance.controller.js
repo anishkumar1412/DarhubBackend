@@ -12,6 +12,7 @@
 import db from '../models/index.js';
 import { uploadToCloudinary } from '../middleware/upload.js';
 import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const {
   PilotMaintenanceTask,
@@ -348,7 +349,7 @@ export const createMaintenanceTask = async (req, res) => {
   } catch (err) {
     await transaction.rollback();
     console.error('createMaintenanceTask error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'createMaintenanceTask');
   }
 };
 
@@ -488,7 +489,7 @@ export const saveDraft = async (req, res) => {
   } catch (err) {
     await transaction.rollback();
     console.error('saveDraft error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'saveDraft');
   }
 };
 
@@ -548,7 +549,7 @@ export const submitReport = async (req, res) => {
     });
   } catch (err) {
     console.error('submitReport error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'submitReport');
   }
 };
 
@@ -637,7 +638,7 @@ export const getAllTasks = async (req, res) => {
     });
   } catch (err) {
     console.error('getAllTasks error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllTasks');
   }
 };
 
@@ -690,7 +691,7 @@ export const getTaskById = async (req, res) => {
     return res.status(200).json({ success: true, data: task });
   } catch (err) {
     console.error('getTaskById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getTaskById');
   }
 };
 
@@ -854,7 +855,7 @@ export const updateTask = async (req, res) => {
   } catch (err) {
     await transaction.rollback();
     console.error('updateTask error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updateTask');
   }
 };
 
@@ -899,7 +900,7 @@ export const deleteTask = async (req, res) => {
   } catch (err) {
     await transaction.rollback();
     console.error('deleteTask error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deleteTask');
   }
 };
 
@@ -949,7 +950,7 @@ export const getTaskStats = async (req, res) => {
     });
   } catch (err) {
     console.error('getTaskStats error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getTaskStats');
   }
 };
 
@@ -1002,7 +1003,7 @@ export const addAttachments = async (req, res) => {
     });
   } catch (err) {
     console.error('addAttachments error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'addAttachments');
   }
 };
 
@@ -1044,6 +1045,6 @@ export const deleteAttachment = async (req, res) => {
     return res.status(200).json({ success: true, message: 'Attachment deleted successfully.' });
   } catch (err) {
     console.error('deleteAttachment error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deleteAttachment');
   }
 };

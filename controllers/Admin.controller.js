@@ -5,11 +5,10 @@ import { v4 as uuidv4 } from "uuid";
 import multer from "multer";
 import { uploadToCloudinary } from "../middleware/upload.js";
 import { randomInt } from "crypto";
-import logger from "../utils/logger.js";
 import env from "../config/env.js";
 import { ApiError } from "../utils/apiError.js";
 import {
-  normalizeEmail, isValidEmail, normalizeMobile, validatePassword, checkLocationChain,
+  normalizeEmail, isValidEmail, normalizeMobile, validatePassword, checkLocationChain, findAccountsByIdentity,
   findVerifiedChannels, consumeVerification, lockIdentifiers, findDuplicate, buildAddresses, parseAddressInput,
 } from "../services/registration.service.js";
 import { resolveIdentityChange, consumeIdentityVerification, isActivatedAdmin } from "../services/identity.service.js";
@@ -20,12 +19,13 @@ import { issueSessionTokens, refreshTokenMatches } from "../services/token.servi
 import { loadRoleNames, isFarmerAccount } from "../middleware/access.js";
 import { parseOrThrow } from "../middleware/validate.js";
 import { loginSchema } from "../validation/auth.schemas.js";
-import { createOrderSchema } from "../validation/order.schemas.js";
+import { createOrderSchema, MAX_ORDER_DAYS } from "../validation/order.schemas.js";
+import { resolveWorkingDays } from "../utils/workingDays.js";
 import { farmerEditSchema } from "../validation/farmer.schemas.js";
 import { respondWithError } from "../middleware/errorHandler.js";
 import { OrderStatusEnum } from "../utils/enums.js";
 import { updateOrderStatus } from "../utils/orderUtils.js";
-import { parseDateOnly, addDaysUTC, todayIST, getDayStatus } from "../utils/dateUtils.js";
+import { parseDateOnly, addDaysUTC, todayIST, getDayStatus, toYMD } from "../utils/dateUtils.js";
 
 
 
@@ -160,10 +160,7 @@ const {
 
 //   } catch (error) {
 //     console.error(error);
-//     return res.status(500).json({
-//       message: "Registration failed",
-//       error: error.message,
-//     });
+//     return respondWithError(req, res, error, 'registerUser');
 //   }
 // };
 
@@ -695,11 +692,7 @@ export const getUserById = async (req, res) => {
     });
   } catch (error) {
     console.error("GetUser Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Error fetching user",
-      error: error.message,
-    });
+    return respondWithError(req, res, error, 'getUserById');
   }
 };
 
@@ -827,11 +820,7 @@ export const getUserById = async (req, res) => {
 
 //   } catch (error) {
 //     console.error("Filter Error:", error);
-//     return res.status(500).json({
-//       success: false,
-//       message: "Error filtering users",
-//       error: error.message
-//     });
+//     return respondWithError(req, res, error, 'filterUsers');
 //   }
 // };
 
@@ -970,11 +959,7 @@ export const getUserById = async (req, res) => {
 
 //   } catch (error) {
 //     console.error("Filter Error:", error);
-//     return res.status(500).json({
-//       success: false,
-//       message: "Error filtering users",
-//       error: error.message
-//     });
+//     return respondWithError(req, res, error, 'filterUsers');
 //   }
 // };
 
@@ -1116,11 +1101,7 @@ export const filterUsers = async (req, res) => {
 
   } catch (error) {
     console.error("Filter Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Error filtering users",
-      error: error.message
-    });
+    return respondWithError(req, res, error, 'filterUsers');
   }
 };
 
@@ -1193,7 +1174,7 @@ export const getMe = async (req, res) => {
 
   } catch (error) {
     console.error("getMe error:", error);
-    res.status(500).json({ success: false, message: "Failed to verify token / fetch user info", error: error.message });
+    return respondWithError(req, res, error, 'getMe');
   }
 };
 
@@ -1241,24 +1222,22 @@ export const createOrder = async (req, res) => {
     const problem = await checkLocationChain(db, address);
     if (problem) return res.status(400).json({ error: `address: ${problem}` });
 
-    // Calculate working days based on MasterWorkingDays logic.
-    // Fallback (no matching rule, no num_of_days sent): default drone capacity of 5 acres/day.
-    let calculatedNumOfDays = num_of_days || Math.max(1, Math.ceil(landAcres / 5));
-
-    try {
-      const workingDayRecord = await db.MasterWorkingDays.findOne({
-        where: {
-          is_active: true,
-          min_acre: { [db.Op.lte]: landAcres },
-          max_acre: { [db.Op.gte]: landAcres },
-        }
-      });
-
-      if (workingDayRecord && workingDayRecord.working_days) {
-        calculatedNumOfDays = workingDayRecord.working_days;
-      }
-    } catch (err) {
-      logger.error(`Error calculating working days: ${err.message}`);
+    // Working days come from the admin's acreage bands (fractions and gaps take the next band up, larger fields are
+    // extrapolated). A farmer's num_of_days is ignored; an admin's only applies when no band exists.
+    const bands = await db.MasterWorkingDays.findAll({
+      where: { is_active: true },
+      attributes: ["id", "min_acre", "max_acre", "working_days"],
+      raw: true,
+    });
+    const { days: calculatedNumOfDays } = resolveWorkingDays(landAcres, bands, {
+      requestedDays: caller.isAdmin ? num_of_days : undefined,
+    });
+    if (calculatedNumOfDays > MAX_ORDER_DAYS) {
+      const tooLarge = new ApiError(400,
+        `${landAcres} acres needs ${calculatedNumOfDays} working days, more than the ${MAX_ORDER_DAYS}-day maximum for one booking. ` +
+        `Please split the area into smaller bookings or contact support.`);
+      tooLarge.code = "BOOKING_TOO_LARGE";
+      throw tooLarge;
     }
 
     // end_date = start_date + (working_days - 1), pure UTC calendar arithmetic
@@ -1286,6 +1265,20 @@ export const createOrder = async (req, res) => {
     const bookingId = uuidv4();
     const autoVerified = !caller.isAdmin;   // the farmer's own login already proves who is booking
     const bookingOtp = autoVerified ? null : generateOtp();
+    const responseBody = {
+      message: "Order and address created successfully",
+      booking_id: bookingId,
+      order_status: autoVerified ? OrderStatusEnum.WAITING_FOR_CONFIRMATION : OrderStatusEnum.ORDER_PLACED,
+      otp_required: !autoVerified,
+      num_of_days: calculatedNumOfDays,
+      start_date: toYMD(startDateObj),
+      end_date: toYMD(calculatedEndDate),
+      price: orderPrice,
+      tax: orderTax,
+      discount: orderDiscount,
+      total_price: orderTotal,
+      dev_otp: !autoVerified && env.EXPOSE_DEV_OTPS ? bookingOtp : undefined,
+    };
 
     // ── Order, timeline and address are saved together or not at all ─────
     await db.sequelize.transaction(async (t) => {
@@ -1299,7 +1292,9 @@ export const createOrder = async (req, res) => {
         if (email && !isValidEmail(email)) throw new ApiError(400, "farmer_details.email is not a valid email address");
 
         await lockIdentifiers(db.sequelize, t, [mobile, email].filter(Boolean));
-        let farmer = await User.findOne({ where: { mobile_number: mobile }, transaction: t });
+        // Any stored spelling of the number ("09798297100", "+919798297100"): looking only for the exact 10 digits made
+        // a second account for a farmer who was already registered under an older spelling
+        let farmer = (await findAccountsByIdentity({ User }, { mobile }, t))[0];
         if (!farmer) {
           farmer = await User.create({
             username: String(farmer_details.name || "Farmer").slice(0, 50),
@@ -1358,19 +1353,13 @@ export const createOrder = async (req, res) => {
         address2: address.address2 || address.lane2,
         pincode: address.pincode,
       }, { transaction: t });
+
+      // Idempotency-Key: the response is stored in the same transaction as the order, so a retry after a crash
+      // or a lost reply gets this booking back instead of creating a second one
+      await req.idempotency?.complete(201, responseBody, { transaction: t });
     });
 
-    return res.status(201).json({
-      message: "Order and address created successfully",
-      booking_id: bookingId,
-      order_status: autoVerified ? OrderStatusEnum.WAITING_FOR_CONFIRMATION : OrderStatusEnum.ORDER_PLACED,
-      otp_required: !autoVerified,
-      price: orderPrice,
-      tax: orderTax,
-      discount: orderDiscount,
-      total_price: orderTotal,
-      dev_otp: !autoVerified && env.EXPOSE_DEV_OTPS ? bookingOtp : undefined,
-    });
+    return res.status(201).json(responseBody);
 
   } catch (error) {
     return respondWithError(req, res, error, "createOrder");
@@ -1991,7 +1980,7 @@ export const filterOrders = async (req, res) => {
     });
   } catch (error) {
     console.error("Error filtering orders:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'filterOrders');
   }
 };
 
@@ -2077,7 +2066,7 @@ export const updateWork = async (req, res) => {
     });
   } catch (error) {
     console.error("Update error:", error);
-    res.status(500).json({ error: error.message });
+    return respondWithError(req, res, error, 'updateWork');
   }
 };
 
