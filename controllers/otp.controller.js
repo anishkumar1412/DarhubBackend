@@ -7,7 +7,7 @@ import logger from '../utils/logger.js';
 import { respondWithError } from '../middleware/errorHandler.js';
 import { sendOtpEmail } from '../services/email.service.js';
 import { isSmsConfigured, sendOtpSms } from '../services/sms.service.js';
-import { findDuplicate } from '../services/registration.service.js';
+import { registrationBlocker } from '../services/registration.service.js';
 import { sendOtpSchema, verifyOtpSchema } from '../validation/auth.schemas.js';
 import { getRateStore } from '../services/rateStore.js';
 import { createOtpGuard, hashOtp } from '../services/otpGuard.js';
@@ -110,8 +110,10 @@ export const sendOtp = async (req, res) => {
     // Only registration needs the account NOT to exist yet
     const isRegistration = !body.purpose || body.purpose === 'registration';
     if (isRegistration) {
-      const duplicate = await findDuplicate({ User }, { email, mobile });
-      if (duplicate) return fail(res, 409, duplicate, { code: 'ALREADY_EXISTS' });
+      // A real account blocks the sign-up (with a message that says what to do). A placeholder that someone else made
+      // for this person, e.g. an administrator booking for a walk-in farmer, does not: they verify and claim it.
+      const blocker = await registrationBlocker({ User }, { email, mobile });
+      if (blocker) return fail(res, 409, blocker.message, { code: blocker.code, field: blocker.field, action: 'login' });
     }
 
     // Blocks, cooldown and the per-IP / per-recipient limits (Redis)
@@ -139,20 +141,15 @@ export const sendOtp = async (req, res) => {
       }, { transaction: t });
     });
 
-    if (env.EXPOSE_DEV_OTPS) {
-      // Testing mode: skip delivery entirely — the OTP is returned directly in the response below
-      logger.info(`[OTP] Dev mode: skipping delivery for ${email || mobile}`);
-    } else {
-      try {
-        if (emailOtp) await sendOtpEmail(email, emailOtp, OTP_EXPIRY_MINUTES);
-        if (mobileOtp) await sendOtpSms(mobile, mobileOtp, OTP_EXPIRY_MINUTES);
-      } catch (deliveryError) {
-        // The code can never reach the person: remove it and let them retry at once (no cooldown)
-        await row.destroy().catch(() => {});
-        await gate.release().catch(() => {});
-        logger.error(`sendOtp: delivery failed (${deliveryError.code || deliveryError.name}): ${deliveryError.message}`);
-        return fail(res, 503, 'We could not send the verification code right now. Please try again in a few minutes.', { code: 'OTP_DELIVERY_FAILED' });
-      }
+    try {
+      if (emailOtp) await sendOtpEmail(email, emailOtp, OTP_EXPIRY_MINUTES);
+      if (mobileOtp) await sendOtpSms(mobile, mobileOtp, OTP_EXPIRY_MINUTES);
+    } catch (deliveryError) {
+      // The code can never reach the person: remove it and let them retry at once (no cooldown)
+      await row.destroy().catch(() => {});
+      await gate.release().catch(() => {});
+      logger.error(`sendOtp: delivery failed (${deliveryError.code || deliveryError.name}): ${deliveryError.message}`);
+      return fail(res, 503, 'We could not send the verification code right now. Please try again in a few minutes.', { code: 'OTP_DELIVERY_FAILED' });
     }
 
     const channels = [emailOtp && 'email', mobileOtp && 'mobile number'].filter(Boolean).join(' and ');

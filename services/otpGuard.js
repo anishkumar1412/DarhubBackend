@@ -34,32 +34,26 @@ export const createOtpGuard = ({ store, policy }) => {
   const beforeSend = async ({ ip, email, mobile }) => {
     const targets = targetsOf({ email, mobile });
 
-    // Check block + cooldown in parallel (read-only, no side effects)
-    const [blocked, coolingTtls] = await Promise.all([
-      blockedFor(targets),
-      Promise.all(targets.map((t) => store.ttl(k('cooldown', t)))),
-    ]);
+    const blocked = await blockedFor(targets);
     if (blocked > 0) {
       return refuse(429, 'OTP_BLOCKED', `Too many wrong codes. For your security, try again in ${wait(blocked)}.`, blocked);
     }
-    const cooling = Math.max(0, ...coolingTtls);
+
+    const cooling = Math.max(0, ...(await Promise.all(targets.map((t) => store.ttl(k('cooldown', t))))));
     if (cooling > 0) {
       return refuse(429, 'OTP_COOLDOWN', `Please wait ${wait(cooling)} before requesting a new code.`, cooling, { resendAfterSeconds: cooling });
     }
 
-    // Increment IP + all per-target send counters in parallel
-    const [perIp, ...perTargets] = await Promise.all([
-      store.increment(k('ip', ip || 'unknown'), policy.windowSeconds),
-      ...targets.map((t) => store.increment(k('sends', t), policy.windowSeconds)),
-    ]);
+    const perIp = await store.increment(k('ip', ip || 'unknown'), policy.windowSeconds);
     if (perIp.count > policy.maxSendsPerIp) {
       return refuse(429, 'OTP_IP_LIMIT', `Too many code requests from this network. Try again in ${wait(perIp.ttl)}.`, perIp.ttl);
     }
+
     let targetRemaining = Infinity;
-    for (let i = 0; i < targets.length; i++) {
-      const perTarget = perTargets[i];
+    for (const t of targets) {
+      const perTarget = await store.increment(k('sends', t), policy.windowSeconds);
       if (perTarget.count > policy.maxSendsPerTarget) {
-        return refuse(429, 'OTP_TARGET_LIMIT', `Too many codes were sent to this ${targets[i].startsWith('email') ? 'email address' : 'mobile number'}. Try again in ${wait(perTarget.ttl)}.`, perTarget.ttl);
+        return refuse(429, 'OTP_TARGET_LIMIT', `Too many codes were sent to this ${t.startsWith('email') ? 'email address' : 'mobile number'}. Try again in ${wait(perTarget.ttl)}.`, perTarget.ttl);
       }
       targetRemaining = Math.min(targetRemaining, policy.maxSendsPerTarget - perTarget.count);
     }

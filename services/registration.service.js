@@ -121,14 +121,104 @@ export const lockIdentifiers = (sequelize, transaction, keys) =>
   lockKeys(sequelize, transaction, keys.filter(Boolean).map((key) => `signup:${key}`));
 
 export const findDuplicate = async ({ User }, { email, mobile }, transaction) => {
-  const spellings = mobile ? [mobile, `0${mobile}`, `91${mobile}`, `+91${mobile}`] : [];
-  const [byEmail, byMobile] = await Promise.all([
-    email  ? User.findOne({ where: sqlWhere(fn('lower', col('email')), email), transaction }) : null,
-    mobile ? User.findOne({ where: { mobile_number: { [Op.in]: spellings } }, transaction }) : null,
-  ]);
-  if (byEmail)  return 'User already exists with this email';
-  if (byMobile) return 'User already exists with this mobile number';
+  if (email) {
+    const byEmail = await User.findOne({ where: sqlWhere(fn('lower', col('email')), email), transaction });
+    if (byEmail) return 'User already exists with this email';
+  }
+  if (mobile) {
+    // Older rows were saved as typed ("09798297100", "+919798297100"), so look for every spelling of the number
+    const spellings = [mobile, `0${mobile}`, `91${mobile}`, `+91${mobile}`];
+    const byMobile = await User.findOne({ where: { mobile_number: { [Op.in]: spellings } }, transaction });
+    if (byMobile) return 'User already exists with this mobile number';
+  }
   return null;
+};
+
+// ── Who already owns this e-mail / mobile ────────────────────────
+
+/** Every stored spelling of a 10-digit mobile number (older rows were saved as typed). */
+export const mobileSpellings = (mobile) => [mobile, `0${mobile}`, `91${mobile}`, `+91${mobile}`];
+
+/** All accounts that use this e-mail or this mobile number (at most one per identifier; may be two different rows). */
+export const findAccountsByIdentity = async ({ User }, { email, mobile }, transaction) => {
+  const any = [
+    ...(email ? [sqlWhere(fn('lower', col('email')), email)] : []),
+    ...(mobile ? [{ mobile_number: { [Op.in]: mobileSpellings(mobile) } }] : []),
+  ];
+  if (!any.length) return [];
+  return User.findAll({ where: { [Op.or]: any }, order: [['id', 'ASC']], transaction });
+};
+
+/**
+ * An account that somebody ELSE made for a person who never registered: an administrator booking for a walk-in
+ * farmer creates one from just a name and a mobile number. Such an account was never verified, never signed in
+ * (nobody knows its password) and was created by another user. It is a placeholder, not a registration, so it must
+ * not stop the real person from signing up: they can claim it by proving they own the contact (see
+ * [evaluateRegistration]). Self-made accounts (created_by = their own id) and accounts with an unknown creator are
+ * never claimable.
+ */
+export const isUnclaimedAccount = (user) =>
+  user.user_type === 3
+  && user.isEmailVerify !== true
+  && user.isMobileVerify !== true
+  && !user.refresh_token
+  && user.created_by != null
+  && Number(user.created_by) !== Number(user.id);
+
+const sameMobile = (stored, mobile) => Boolean(mobile) && normalizeMobile(stored) === mobile;
+const sameEmail = (stored, email) => Boolean(email) && normalizeEmail(stored) === email;
+
+/** The 409 for "this belongs to an existing account": names the field and tells the person what to do. */
+const alreadyRegistered = (accounts, { email, mobile }) => {
+  const byEmail = accounts.some((a) => sameEmail(a.email, email));
+  const byMobile = accounts.some((a) => sameMobile(a.mobile_number, mobile));
+  const field = byEmail && byMobile ? 'both' : byEmail ? 'email' : 'mobile';
+  const what = field === 'both' ? 'email address and mobile number' : field === 'email' ? 'email address' : 'mobile number';
+  const err = new ApiError(409, accounts.length > 1 && field === 'both'
+    ? `These details already belong to existing accounts. Please log in instead.`
+    : `An account already exists with this ${what}. Please log in instead.`);
+  err.code = 'ALREADY_EXISTS';
+  err.field = field;
+  return err;
+};
+
+/**
+ * Decides what a sign-up with these details means. Returns { action: 'create' } or { action: 'claim', existing },
+ * or throws the 409 to send back:
+ *  - nobody uses the details                          -> create a new account;
+ *  - they belong to a real, registered account        -> 409 "already exists, please log in" (field: email|mobile|both);
+ *  - they belong to ONE unclaimed placeholder account -> claim it, but only for a farmer, and only when the person has
+ *    proved (with an OTP) that they own every detail that matched the placeholder: otherwise the placeholder's
+ *    bookings would be handed to whoever typed someone else's number.
+ * `verified` is { email, mobile }: what the person proved in the last 30 minutes (findVerifiedChannels).
+ */
+export const evaluateRegistration = (accounts, identity, verified, userType) => {
+  if (accounts.length === 0) return { action: 'create' };
+  if (accounts.length > 1 || !isUnclaimedAccount(accounts[0]) || userType !== 3) {
+    throw alreadyRegistered(accounts, identity);
+  }
+  const existing = accounts[0];
+  const needs = [
+    ...(sameEmail(existing.email, identity.email) && !verified.email ? ['email address'] : []),
+    ...(sameMobile(existing.mobile_number, identity.mobile) && !verified.mobile ? ['mobile number'] : []),
+  ];
+  if (needs.length) {
+    const err = new ApiError(409, `A booking was already made for this ${needs.join(' and ')}. Verify it with the OTP we send to link it to your new account; if you cannot receive the code, please contact Darhub support.`);
+    err.code = 'CLAIM_NEEDS_VERIFICATION';
+    throw err;
+  }
+  return { action: 'claim', existing };
+};
+
+/**
+ * Used before an OTP is sent for a sign-up: null when the details may proceed (new, or a claimable placeholder),
+ * otherwise the 409 to answer with. The claim itself is decided at registration, once the person has verified.
+ */
+export const registrationBlocker = async (models, identity) => {
+  const accounts = await findAccountsByIdentity(models, identity);
+  if (accounts.length === 0) return null;
+  if (accounts.length === 1 && isUnclaimedAccount(accounts[0])) return null;
+  return alreadyRegistered(accounts, identity);
 };
 
 // ── Addresses ────────────────────────────────────────────────────

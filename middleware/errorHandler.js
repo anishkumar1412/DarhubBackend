@@ -35,7 +35,7 @@ const classify = (err) => {
   if (name === 'SequelizeForeignKeyConstraintError') {
     return { status: 409, code: 'CONSTRAINT_VIOLATION', message: 'This record is linked to other data and the change was refused.' };
   }
-  if (name === 'SequelizeDatabaseError' && /invalid input syntax|out of range/i.test(err.message || '')) {
+  if (name === 'SequelizeDatabaseError' && /invalid input syntax|out of range|invalid input value for enum|value too long/i.test(err.message || '')) {
     return { status: 400, code: 'INVALID_INPUT', message: 'One of the values sent is not valid.' };
   }
 

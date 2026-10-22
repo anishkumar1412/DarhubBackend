@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'crypto';
+import { randomUUID, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 
 /**
@@ -8,8 +8,10 @@ import jwt from 'jsonwebtoken';
  */
 export const issueSessionTokens = async (user, { transaction } = {}) => {
   const payload = { id: user.id, email: user.email };
-  const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '3d' });
-  const refreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
+  // jwtid: two tokens issued within the same second would otherwise be byte-identical (iat has 1 s resolution), so a
+  // refresh right after a login handed back the same refresh token and the "old" one kept working
+  const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '3d', jwtid: randomUUID() });
+  const refreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d', jwtid: randomUUID() });
   await user.update({ refresh_token: refreshToken }, { transaction });
   return { accessToken, refreshToken };
 };

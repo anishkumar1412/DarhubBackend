@@ -289,7 +289,22 @@ export const rejectAssignment = async (req, res) => {
     const declinedDates = rejectable.map((l) => toYMD(l.working_date));
 
     // Every write of the decline succeeds together or none does
-    await db.sequelize.transaction(async (t) => {
+    const conflict = await db.sequelize.transaction(async (t) => {
+      // Serialise with accept / cancel / start for this booking, then decide from the rows as they are NOW:
+      // the copies read above can be stale when an accept (or a start) won the race a moment ago.
+      const lockedOrder = await SprayingOrder.findByPk(booking_id, { transaction: t, lock: t.LOCK.UPDATE });
+      if (!lockedOrder || CLOSED_ORDER_STATUSES.includes(lockedOrder.order_status)) {
+        return `This booking is ${lockedOrder?.order_status || 'no longer available'} and can no longer be declined.`;
+      }
+      order.order_status = lockedOrder.order_status;
+      const lockedLogs = await SprayingDailyLogs.findAll({
+        where: { id: rejectable.map((l) => l.id) }, order: [['working_date', 'ASC']], transaction: t, lock: t.LOCK.UPDATE,
+      });
+      const stillRejectable = lockedLogs.filter((l) => ['scheduled', 'confirmed', 'declined'].includes(getDayStatus(l)));
+      if (stillRejectable.length === 0) return 'These days have already started or finished and cannot be declined.';
+      rejectable.splice(0, rejectable.length, ...stillRejectable);
+      declinedDates.splice(0, declinedDates.length, ...stillRejectable.map((l) => toYMD(l.working_date)));
+
       for (const log of rejectable) {
         await log.update({
           is_pilot_confirmed: false,
@@ -332,7 +347,9 @@ export const rejectAssignment = async (req, res) => {
         created_by: pilotId,
         created_on: now,
       }, { transaction: t });
+      return null;
     });
+    if (conflict) return res.status(409).json({ success: false, message: conflict });
 
     const current = await SprayingOrder.findByPk(booking_id);
     return res.status(200).json({

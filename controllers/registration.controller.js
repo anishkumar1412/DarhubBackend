@@ -6,7 +6,7 @@ import { respondWithError } from '../middleware/errorHandler.js';
 import { ApiError } from '../utils/apiError.js';
 import { issueSessionTokens } from '../services/token.service.js';
 import {
-  findVerifiedChannels, consumeVerification, lockIdentifiers, findDuplicate,
+  findVerifiedChannels, consumeVerification, lockIdentifiers, findAccountsByIdentity, evaluateRegistration,
   buildAddresses, parseAddressInput, verificationProblem,
 } from '../services/registration.service.js';
 import {
@@ -75,28 +75,37 @@ const createAccount = async ({ identity, verified, userType, refPrefix, role, cr
   return db.sequelize.transaction(async (t) => {
     await lockIdentifiers(db.sequelize, t, [identity.email, identity.mobile]);
 
-    const duplicate = await findDuplicate({ User }, identity, t);
-    if (duplicate) throw new ApiError(409, duplicate);
+    // Decided again here, under the lock: another request may have registered these details a moment ago
+    const decision = evaluateRegistration(await findAccountsByIdentity({ User }, identity, t), identity, verified, userType);
 
-    const user = await User.create({
+    const accountFields = {
       email: identity.email,
       password: hashedPassword,
       username: `${identity.firstName}_${identity.lastName}_${Date.now()}`.substring(0, 50),
       mobile_number: identity.mobile,
-      is_superuser: false,
-      user_type: userType,
       isEmailVerify: verified.email,
       isMobileVerify: verified.mobile,
-      created_by: creatorId,
-    }, { transaction: t });
+    };
+
+    let user;
+    if (decision.action === 'claim') {
+      // The person proved they own the number / address that an administrator booked under: this becomes their
+      // account, keeping every booking made for them. The placeholder's unusable password is replaced by theirs.
+      user = decision.existing;
+      await user.update({ ...accountFields, email: identity.email ?? user.email, modified_by: user.id, modified_on: new Date() }, { transaction: t });
+    } else {
+      user = await User.create({ ...accountFields, is_superuser: false, user_type: userType, created_by: creatorId }, { transaction: t });
+    }
 
     const ownerId = creatorId || user.id;
-    await user.update({ user_ref_id: `${refPrefix}-${String(user.id).padStart(5, '0')}`, created_by: ownerId }, { transaction: t });
+    await user.update({
+      user_ref_id: user.user_ref_id || `${refPrefix}-${String(user.id).padStart(5, '0')}`,
+      ...(decision.action === 'create' && { created_by: ownerId }),
+    }, { transaction: t });
 
-    await UserRole.create({ user_id: user.id, role_id: role.id, created_by: ownerId }, { transaction: t });
+    await UserRole.findOrCreate({ where: { user_id: user.id, role_id: role.id }, defaults: { created_by: ownerId }, transaction: t });
 
-    await UserProfile.create({
-      user_id: user.id,
+    const profileFields = {
       first_name: identity.firstName,
       last_name: identity.lastName,
       whatsapp_number: identity.mobile,
@@ -105,9 +114,14 @@ const createAccount = async ({ identity, verified, userType, refPrefix, role, cr
       user_image_new_filename: imageInfo?.new_name || null,
       user_image_url: imageInfo?.url || null,
       ...(extras?.profile || {}),
-      created_by: ownerId,
-    }, { transaction: t });
+    };
+    const existingProfile = decision.action === 'claim' ? await UserProfile.findOne({ where: { user_id: user.id }, transaction: t }) : null;
+    if (existingProfile) await existingProfile.update({ ...profileFields, modified_by: user.id, modified_on: new Date() }, { transaction: t });
+    else await UserProfile.create({ user_id: user.id, ...profileFields, created_by: ownerId }, { transaction: t });
 
+    if (addresses.length > 0 && decision.action === 'claim') {
+      await UserAddress.destroy({ where: { user_id: user.id }, transaction: t });   // the form is the person's own, up-to-date address
+    }
     for (const address of addresses) {
       await UserAddress.create({ user_id: user.id, ...address, created_by: ownerId }, { transaction: t });
     }
@@ -117,14 +131,24 @@ const createAccount = async ({ identity, verified, userType, refPrefix, role, cr
     await consumeVerification({ OtpVerification }, { email: verified.email ? identity.email : null, mobile: verified.mobile ? identity.mobile : null }, t);
 
     const tokens = await issueSessionTokens(user, { transaction: t });
-    return { user, tokens };
+    return { user, tokens, claimed: decision.action === 'claim' };
   });
 };
 
-const success = (res, message, { user, tokens }) =>
+/**
+ * Fails fast, before any document is uploaded to Cloudinary: a sign-up that is going to be refused (the details
+ * belong to an existing account) used to upload every file first and then answer "already exists". createAccount
+ * decides again, under a lock, because two requests can race.
+ */
+const assertCanRegister = async (identity, verified, userType) =>
+  evaluateRegistration(await findAccountsByIdentity({ User }, identity), identity, verified, userType);
+
+const success = (res, message, { user, tokens, claimed }) =>
   res.status(201).json({
     success: true,
     message,
+    // true when the details belonged to a booking an administrator made for this person: it is now their account
+    ...(claimed && { linked_existing_bookings: true }),
     user_id: user.id,
     user_ref_id: user.user_ref_id,
     token: tokens.accessToken,
@@ -142,6 +166,7 @@ export const registerFarmer = async (req, res) => {
 
     const identity = readIdentity(body, { emailRequired: false });
     const verified = await requireVerifiedChannel(identity);
+    await assertCanRegister(identity, verified, 3);
 
     // Which role a farmer gets is decided here. The client used to send a role id ("10") that was trusted as-is,
     // so a hand-made request could give itself any role, including an administrator's.
@@ -178,6 +203,7 @@ export const registerPilot = async (req, res) => {
 
     const identity = readIdentity(body);
     const verified = await requireVerifiedChannel(identity);
+    await assertCanRegister(identity, verified, 2);
 
     const upiId = readUpiId(body.upi_id);
     const banks = readBankDetails(body) || [];

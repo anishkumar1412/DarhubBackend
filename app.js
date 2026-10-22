@@ -13,6 +13,7 @@ import env from './config/env.js';
 import { errorHandler, notFoundHandler, hideServerErrorDetails } from './middleware/errorHandler.js';
 import { createApiLimiter, createAuthLimiter } from './middleware/rateLimiters.js';
 import { authenticateAdmin } from './middleware/adminAuth.middleware.js';
+import { checkRouteParams } from './middleware/params.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,10 +102,18 @@ const allowedOrigins = [
   "https://darhubadmin.onrender.com",
   ...env.CORS_ORIGINS,
 ];
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+// Browsers may only read these response headers when they are listed (request id for support, idempotent replays)
+app.use(cors({ origin: allowedOrigins, credentials: true, exposedHeaders: ['X-Request-Id', 'Idempotency-Key', 'Idempotent-Replayed', 'Retry-After'] }));
 
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// Express 5 leaves req.body undefined when a request has no body, and handlers written as `const { x } = req.body`
+// then crash with a 500 (e.g. POST /order/update-work/:id without a form). An empty object is what they expect.
+// (multer replaces it with the form fields on multipart routes.)
+app.use((req, res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
 
 // ── Rate Limiting ─────────────────────────────────────────────────
 // General API: generous and counted per signed-in user; sign-in/OTP/password routes: strict and counted per IP.
@@ -150,6 +159,12 @@ app.get("/health", async (req, res) => {
 });
 
 // ── Routes ────────────────────────────────────────────────────────
+
+// Malformed ids in the URL ("abc" for a number, "123" for a booking UUID) are a 400 before any handler runs
+[router, userRouter, locationRoutes, orderRouter, cropRouter, workingDaysRouter, fertilizerRouter, warehouseRouter,
+  adminAuthRouter, adminAccountRouter, rolesRouter, privilegesRouter, rolePrivilegesRouter, userRolesRouter,
+  inventoryRouter, droneStatusRouter, pilotMaintenanceRouter, vendorRouter, pilotWorkRouter, farmerRouter,
+].forEach(checkRouteParams);
 
 // Existing routes
 app.use('/api', userRouter);
