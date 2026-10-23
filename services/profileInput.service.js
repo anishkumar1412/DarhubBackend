@@ -26,14 +26,17 @@ export const discardUploads = async (uploaded) => {
       logger.warn(`Could not remove orphan upload ${u.new_name}: ${err.message}`))));
 };
 
+// Pilot documents (ID, licences, certificates): scans or photos as JPG/JPEG, or a PDF. PNG is not accepted.
+export const DOCUMENT_TYPES = ['jpg', 'jpeg', 'pdf'];
+
 export const PILOT_FILES = [
   { key: 'profile_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Profile photo', docType: 5 },
-  { key: 'aaddhar_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Aadhar Card', docType: 10 },
-  { key: 'pan_card_image', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Pan Card', docType: 15 },
-  { key: 'dcga_pilot_cert', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI Pilot Cert', docType: 20 },
-  { key: 'dcga_pilot_license', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'DGCI License', docType: 25 },
-  { key: 'medical_certificate', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Medical Cert', docType: 30 },
-  { key: 'insurance_doc', allowed: ['jpg', 'jpeg', 'png', 'pdf'], label: 'Insurance Doc', docType: 35 },
+  { key: 'aaddhar_image', allowed: DOCUMENT_TYPES, label: 'Aadhar Card', docType: 10 },
+  { key: 'pan_card_image', allowed: DOCUMENT_TYPES, label: 'Pan Card', docType: 15 },
+  { key: 'dcga_pilot_cert', allowed: DOCUMENT_TYPES, label: 'DGCI Pilot Cert', docType: 20 },
+  { key: 'dcga_pilot_license', allowed: DOCUMENT_TYPES, label: 'DGCI License', docType: 25 },
+  { key: 'medical_certificate', allowed: DOCUMENT_TYPES, label: 'Medical Cert', docType: 30 },
+  { key: 'insurance_doc', allowed: DOCUMENT_TYPES, label: 'Insurance Doc', docType: 35 },
   { key: 'passbook_image', allowed: ['jpg', 'jpeg', 'png'], label: 'Passbook photo', isBank: true },
 ];
 
