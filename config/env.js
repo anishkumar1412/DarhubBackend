@@ -25,8 +25,9 @@ const envSchema = Joi.object({
   // ── App ───────────────────────────────────────────────────────
   PORT:     Joi.number().default(5678),
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
-  // true = return OTPs in API responses on a deployed server (testing only; never on a public production server)
-  EXPOSE_OTP: Joi.boolean().default(false),
+  // OTPs are returned in API responses while the project is still in development/testing (on Render too).
+  // GO-LIVE: set EXPOSE_OTP=false on the server, otherwise anyone can read the codes.
+  EXPOSE_OTP: Joi.boolean().default(true),
 
   // ── JWT ───────────────────────────────────────────────────────
   JWT_SECRET:         Joi.string().required(),
@@ -160,5 +161,9 @@ const env = {
   CLOUD_KEY:    envVars.CLOUD_KEY,
   CLOUD_NAME:   envVars.CLOUD_NAME,
 };
+
+if (env.NODE_ENV === 'production' && env.EXPOSE_DEV_OTPS) {
+  logger.warn('[OTP] EXPOSE_OTP is on: verification codes are returned in API responses. Set EXPOSE_OTP=false before going live.');
+}
 
 export default env;
