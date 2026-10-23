@@ -141,15 +141,23 @@ export const sendOtp = async (req, res) => {
       }, { transaction: t });
     });
 
-    try {
-      if (emailOtp) await sendOtpEmail(email, emailOtp, OTP_EXPIRY_MINUTES);
-      if (mobileOtp) await sendOtpSms(mobile, mobileOtp, OTP_EXPIRY_MINUTES);
-    } catch (deliveryError) {
-      // The code can never reach the person: remove it and let them retry at once (no cooldown)
-      await row.destroy().catch(() => {});
-      await gate.release().catch(() => {});
-      logger.error(`sendOtp: delivery failed (${deliveryError.code || deliveryError.name}): ${deliveryError.message}`);
-      return fail(res, 503, 'We could not send the verification code right now. Please try again in a few minutes.', { code: 'OTP_DELIVERY_FAILED' });
+    if (env.EXPOSE_DEV_OTPS) {
+      // The codes are returned in this response. Delivery is only a bonus: it runs in the background so a blocked
+      // SMTP port (Render free tier) can neither delay the response nor fail it.
+      [emailOtp && sendOtpEmail(email, emailOtp, OTP_EXPIRY_MINUTES), mobileOtp && sendOtpSms(mobile, mobileOtp, OTP_EXPIRY_MINUTES)]
+        .filter(Boolean)
+        .forEach((delivery) => delivery.catch((err) => logger.warn(`sendOtp: background delivery skipped (${err.code || err.name}); OTP is in the response.`)));
+    } else {
+      try {
+        if (emailOtp) await sendOtpEmail(email, emailOtp, OTP_EXPIRY_MINUTES);
+        if (mobileOtp) await sendOtpSms(mobile, mobileOtp, OTP_EXPIRY_MINUTES);
+      } catch (deliveryError) {
+        // The code can never reach the person: remove it and let them retry at once (no cooldown)
+        await row.destroy().catch(() => {});
+        await gate.release().catch(() => {});
+        logger.error(`sendOtp: delivery failed (${deliveryError.code || deliveryError.name}): ${deliveryError.message}`);
+        return fail(res, 503, 'We could not send the verification code right now. Please try again in a few minutes.', { code: 'OTP_DELIVERY_FAILED' });
+      }
     }
 
     const channels = [emailOtp && 'email', mobileOtp && 'mobile number'].filter(Boolean).join(' and ');

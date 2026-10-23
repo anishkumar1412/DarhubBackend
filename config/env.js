@@ -25,6 +25,8 @@ const envSchema = Joi.object({
   // ── App ───────────────────────────────────────────────────────
   PORT:     Joi.number().default(5678),
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
+  // true = return OTPs in API responses on a deployed server (testing only; never on a public production server)
+  EXPOSE_OTP: Joi.boolean().default(false),
 
   // ── JWT ───────────────────────────────────────────────────────
   JWT_SECRET:         Joi.string().required(),
@@ -128,10 +130,11 @@ const env = {
   EMAIL_FROM_NAME:    envVars.EMAIL_FROM_NAME,
 
   // ── OTP / SMS ────────────────────────────────────────────────
-  SMS_PROVIDER:    envVars.SMS_PROVIDER ?? (envVars.NODE_ENV === 'production' ? 'none' : 'console'),
-  // NODE_ENV=development: the generated OTPs are returned in the API response (no mailbox / SMS gateway needed).
-  // Any other value (production, test): OTPs are only delivered by email / SMS and never appear in a response.
-  EXPOSE_DEV_OTPS: envVars.NODE_ENV === 'development',
+  // NODE_ENV=development, or EXPOSE_OTP=true on any server: the generated OTPs are returned in the API response (no
+  // mailbox / SMS gateway needed; delivery is attempted in the background and its failure is ignored).
+  // Otherwise (production, test): OTPs are only delivered by email / SMS and never appear in a response.
+  EXPOSE_DEV_OTPS: envVars.NODE_ENV === 'development' || envVars.EXPOSE_OTP === true,
+  SMS_PROVIDER:    envVars.SMS_PROVIDER ?? (envVars.NODE_ENV === 'production' && envVars.EXPOSE_OTP !== true ? 'none' : 'console'),
   OTP: {
     expirySeconds: envVars.OTP_EXPIRY_SECONDS,
     resendSeconds: envVars.OTP_RESEND_COOLDOWN_SECONDS,
