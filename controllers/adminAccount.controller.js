@@ -76,29 +76,39 @@ export const updateOwnProfile = asyncHandler(async (req, res) => {
 
 // ── GET /api/admin/account/admins ─────────────────────────────────
 export const listAdmins = asyncHandler(async (req, res) => {
-  const users = await User.findAll({
-    where:      { user_type: 2 },
-    attributes: ['id', 'email', 'username', 'createdAt'],
-    order:      [['createdAt', 'DESC']],
+  // Pilots are user_type 2 as well, so the admin list is defined by having an admin profile. Four queries in total,
+  // however many admins there are (it used to run three per user_type-2 account, pilots included).
+  const profiles = await AdminProfile.findAll();
+  const userIds = profiles.map((p) => p.user_id);
+
+  const [users, userRoles] = userIds.length
+    ? await Promise.all([
+        User.findAll({
+          where:      { id: userIds, user_type: 2 },
+          attributes: ['id', 'email', 'username', 'createdAt'],
+          order:      [['createdAt', 'DESC']],
+        }),
+        UserRole.findAll({ where: { user_id: userIds } }),
+      ])
+    : [[], []];
+  const roles = userRoles.length ? await MasterRole.findAll({ where: { id: [...new Set(userRoles.map((r) => r.role_id))] } }) : [];
+
+  const profileOf = new Map(profiles.map((p) => [p.user_id, p]));
+  const roleIdOf  = new Map(userRoles.map((r) => [r.user_id, r.role_id]));
+  const roleName  = new Map(roles.map((r) => [r.id, r.role_name]));
+
+  const data = users.map((u) => {
+    const profile = profileOf.get(u.id);
+    return {
+      id:          u.id,
+      email:       u.email,
+      full_name:   profile?.full_name || u.username,
+      role:        roleName.get(roleIdOf.get(u.id)) || null,
+      is_verified: profile?.is_verified || false,
+      last_login:  profile?.last_login || null,
+      createdAt:   u.createdAt,
+    };
   });
-
-  const data = await Promise.all(
-    users.map(async (u) => {
-      const profile  = await AdminProfile.findOne({ where: { user_id: u.id } });
-      const userRole = await UserRole.findOne({ where: { user_id: u.id } });
-      const role     = userRole ? await MasterRole.findByPk(userRole.role_id) : null;
-
-      return {
-        id:          u.id,
-        email:       u.email,
-        full_name:   profile?.full_name || u.username,
-        role:        role?.role_name || null,
-        is_verified: profile?.is_verified || false,
-        last_login:  profile?.last_login || null,
-        createdAt:   u.createdAt,
-      };
-    })
-  );
 
   return res.status(200).json(new ApiResponse(200, data, 'Admin list fetched successfully'));
 });
