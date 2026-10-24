@@ -52,7 +52,13 @@ const envSchema = Joi.object({
 
   // ── OTP / SMS ────────────────────────────────────────────────
   // 'console' prints mobile OTPs to the server log (development only); 'none' = no SMS gateway is connected.
-  SMS_PROVIDER:     Joi.string().valid('none', 'console').optional(),
+  SMS_PROVIDER:     Joi.string().valid('none', 'console', 'textbee').optional(),
+  // TextBee (SMS from your own Android phone, https://textbee.dev). Only needed when SMS_PROVIDER=textbee.
+  TEXTBEE_API_KEY:    Joi.string().when('SMS_PROVIDER', { is: 'textbee', then: Joi.required(), otherwise: Joi.optional() }),
+  TEXTBEE_BASE_URL:   Joi.string().uri().default('https://api.textbee.dev'),
+  TEXTBEE_DEVICE_ID:  Joi.string().optional(),                                  // only if several phones are registered
+  TEXTBEE_TIMEOUT_MS: Joi.number().integer().min(1000).max(60000).default(10000),
+  SMS_DEFAULT_COUNTRY_CODE: Joi.string().pattern(/^\+\d{1,4}$/).default('+91'), // for 10-digit numbers
   OTP_EXPIRY_SECONDS:          Joi.number().integer().min(60).max(3600).default(180),  // how long a code is valid
   OTP_RESEND_COOLDOWN_SECONDS: Joi.number().integer().min(10).max(600).default(30),    // wait before "Resend" (also the app's countdown)
   OTP_SEND_WINDOW_MINUTES:     Joi.number().integer().min(1).max(1440).default(15),    // window for the two send limits below
@@ -134,6 +140,13 @@ const env = {
   // NODE_ENV=development, or EXPOSE_OTP=true on any server: the generated OTPs are returned in the API response (no
   // mailbox / SMS gateway needed; delivery is attempted in the background and its failure is ignored).
   // Otherwise (production, test): OTPs are only delivered by email / SMS and never appear in a response.
+  TEXTBEE: {
+    apiKey: envVars.TEXTBEE_API_KEY,
+    baseUrl: envVars.TEXTBEE_BASE_URL,
+    deviceId: envVars.TEXTBEE_DEVICE_ID,
+    timeoutMs: envVars.TEXTBEE_TIMEOUT_MS,
+  },
+  SMS_DEFAULT_COUNTRY_CODE: envVars.SMS_DEFAULT_COUNTRY_CODE,
   EXPOSE_DEV_OTPS: envVars.NODE_ENV === 'development' || envVars.EXPOSE_OTP === true,
   SMS_PROVIDER:    envVars.SMS_PROVIDER ?? (envVars.NODE_ENV === 'production' && envVars.EXPOSE_OTP !== true ? 'none' : 'console'),
   OTP: {
