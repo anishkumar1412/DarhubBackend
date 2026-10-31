@@ -4,7 +4,7 @@
  * Pilot-facing Maintenance Task Form API routes.
  * Mount in server.js as: app.use('/api/pilot/maintenance', pilotMaintenanceRouter)
  *
- * All routes require JWT authentication via the `authenticate` middleware.
+ * All routes require a pilot (or admin) login: `authenticatePilot`.
  *
  * Route Summary:
  * ─────────────────────────────────────────────────────────────────────────────
@@ -22,7 +22,7 @@
  */
 
 import express from 'express';
-import { authenticate } from '../middleware/authMiddleware.js';
+import { authenticatePilot } from '../middleware/pilotAuth.middleware.js';
 import upload from '../middleware/upload.js';
 
 import {
@@ -41,7 +41,9 @@ import {
 const router = express.Router();
 
 // All routes require pilot JWT authentication
-router.use(authenticate);
+// Pilots (and admins, who also fill this form in the admin panel). Plain `authenticate` let any signed-in farmer
+// create and read maintenance tasks.
+router.use(authenticatePilot);
 
 // Multer middleware for file uploads (accepts any dynamically named fields)
 const uploadAttachments = upload.any();

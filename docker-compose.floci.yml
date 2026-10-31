@@ -1,0 +1,13 @@
+# Local AWS (S3) for development: docker compose -f docker-compose.floci.yml up -d
+# Then in .env: STORAGE_PROVIDER=s3, S3_ENDPOINT=http://localhost:4566, S3_ACCESS_KEY_ID=test, S3_SECRET_ACCESS_KEY=test
+services:
+  floci:
+    image: floci/floci:latest
+    container_name: darhub-floci
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./.floci-data:/app/data          # files survive restarts
+    environment:
+      FLOCI_STORAGE_MODE: persistent
+    restart: unless-stopped

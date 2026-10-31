@@ -197,3 +197,24 @@ class TokenAuthenticator(
    - **TokenAuthenticator** saves the new tokens locally.
    - **TokenAuthenticator** retries the original `getFarmerBookings()` request with the *new* access token.
    - The UI never knows an error occurred; it just receives the data slightly delayed.
+
+---
+
+## Sign-up when the details are already in use (latest)
+
+`POST /api/otp/send-otp` (sign-up) and the registration endpoints decide what an existing row means:
+
+| The e-mail / mobile belongs to ... | Result |
+|---|---|
+| nobody | normal sign-up |
+| a real account (registered by its owner, verified, or ever signed in) | `409` `{ code: "ALREADY_EXISTS", field: "email" \| "mobile" \| "both", action: "login", message: "An account already exists with this mobile number. Please log in instead." }` |
+| a **placeholder** an administrator made for a walk-in farmer (never verified, never signed in, created by someone else) | allowed. The person verifies the OTP and registers; the placeholder becomes their account and keeps every booking made for them (`linked_existing_bookings: true` in the response) |
+| a placeholder, but the matching detail was not verified (e.g. only the e-mail OTP was entered) | `409` `{ code: "CLAIM_NEEDS_VERIFICATION" }`: the bookings are not handed to someone who has not proved the number is theirs |
+
+Notes
+- Verifying the OTP and then closing the app loses nothing on the server: a verified e-mail / mobile stays verified for
+  30 minutes. Opening the app again, "Send OTP" waits out the resend countdown (`OTP_COOLDOWN`), then a new code is sent.
+- If the sign-up request itself was cut off after the server had created the account (slow network, app killed), the
+  next attempt is answered with `ALREADY_EXISTS ... Please log in instead`: the person logs in with the password they chose.
+- Pilot sign-up never claims a placeholder (placeholders are farmers); the details are refused as `ALREADY_EXISTS`.
+- Duplicate checks run before any document is uploaded, so a refused pilot sign-up no longer uploads every file first.

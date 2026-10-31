@@ -1,0 +1,70 @@
+# Render Blueprint for the Darhub backend (New + -> Blueprint, or create the same settings by hand in the dashboard).
+# The PostgreSQL database is created separately in the dashboard (Render Postgres), then its connection values are
+# pasted into the DB_* variables below. Every `sync: false` value is a secret you type in the dashboard: never put real
+# values in this file. Full guide: docs/DEPLOY_RENDER.md
+services:
+  - type: web
+    name: darhub-backend
+    runtime: node
+    plan: starter                  # paid: the notification worker and the 07:00 reminder cron need an always-on instance,
+                                   # and the free tier sleeps and blocks outbound SMTP
+    region: singapore              # pick the region closest to your users AND create the database in the same region
+    buildCommand: npm ci
+    startCommand: npm start
+    preDeployCommand: npm run db:migrate && npm run db:seed   # runs before every deploy; the server refuses to start with a pending migration
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DB_DIALECT
+        value: postgres
+      - key: DB_HOST             # Internal Database URL host (starts with dpg-)
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: JWT_SECRET          # long random value
+        sync: false
+      - key: JWT_REFRESH_SECRET  # long random value, different from JWT_SECRET
+        sync: false
+      - key: ADMIN_PANEL_URL     # the real admin panel URL (used in invitation / reset links)
+        sync: false
+      - key: SUPER_ADMIN_EMAIL
+        sync: false
+      - key: SUPER_ADMIN_NAME
+        value: Super Admin
+      - key: CORS_ORIGINS        # the admin panel origin(s), comma separated
+        sync: false
+      # Push notifications (docs/PUSH_NOTIFICATIONS.md)
+      - key: NOTIFICATION_PROVIDER
+        value: fcm
+      - key: FCM_SERVICE_ACCOUNT_JSON   # base64 of the Firebase service-account key: base64 -w0 key.json
+        sync: false
+      # File storage: Render's disk is wiped on every deploy, so photos must go to Cloudinary (or S3)
+      - key: STORAGE_PROVIDER
+        value: cloudinary
+      - key: CLOUD_NAME
+        sync: false
+      - key: CLOUD_KEY
+        sync: false
+      - key: CLOUD_SECRET
+        sync: false
+      # Email (the first super-admin setup link and password resets are e-mailed). Paid instance needed for SMTP.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false

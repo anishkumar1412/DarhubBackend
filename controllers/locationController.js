@@ -1,5 +1,7 @@
 import { Op } from "sequelize";
 import db from "../models/index.js";
+import { respondWithError } from '../middleware/errorHandler.js';
+import { resolveLocation } from '../services/locationResolve.service.js';
 
 const {
   MasterState,
@@ -23,7 +25,7 @@ export const getStates = async (req, res) => {
     });
     return res.json(states);
   } catch (error) {
-    return res.status(500).json({ message: "Failed to fetch states", error: error.message });
+    return respondWithError(req, res, error, 'getStates');
   }
 };
 
@@ -37,7 +39,7 @@ export const getDistrictsByState = async (req, res) => {
     });
     return res.json(districts);
   } catch (error) {
-    return res.status(500).json({ message: "Failed to fetch districts", error: error.message });
+    return respondWithError(req, res, error, 'getDistrictsByState');
   }
 };
 
@@ -51,7 +53,7 @@ export const getBlocksByDistrict = async (req, res) => {
     });
     return res.json(blocks);
   } catch (error) {
-    return res.status(500).json({ message: "Failed to fetch blocks", error: error.message });
+    return respondWithError(req, res, error, 'getBlocksByDistrict');
   }
 };
 
@@ -69,7 +71,22 @@ export const getPanchayatsByBlock = async (req, res) => {
     });
     return res.json(panchayats);
   } catch (error) {
-    return res.status(500).json({ message: "Failed to fetch panchayats", error: error.message });
+    return respondWithError(req, res, error, 'getPanchayatsByBlock');
+  }
+};
+
+// ──────────────────────────────────────────────────────────
+//  GPS: place names from the phone's reverse geocoder -> our ids
+//  GET /api/locations/match?state=Gujarat&district=Rajkot&places=Gondal|Gondal City
+//  Public like the lists above (sign-up needs it); only names are sent, never coordinates.
+// ──────────────────────────────────────────────────────────
+export const matchLocation = async (req, res) => {
+  try {
+    const { state, district, places } = req.valid.query;
+    const matched = await resolveLocation(db, { state, district, places });
+    return res.json({ success: true, ...matched, complete: Boolean(matched.state && matched.district && matched.block) });
+  } catch (error) {
+    return respondWithError(req, res, error, 'matchLocation');
   }
 };
 
@@ -109,7 +126,7 @@ export const getDrones = async (req, res) => {
 
     return res.json({ success: true, data });
   } catch (error) {
-    return res.status(500).json({ message: "Failed to fetch drones", error: error.message });
+    return respondWithError(req, res, error, 'getDrones');
   }
 };
 
@@ -166,7 +183,7 @@ export const createAddressBulk = async (req, res) => {
     });
   } catch (error) {
     console.error("createAddressBulk:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createAddressBulk');
   }
 };
 
@@ -267,7 +284,7 @@ export const getAllAddresses = async (req, res) => {
     return res.json({ success: true, total: rows.length, data: rows });
   } catch (error) {
     console.error("getAllAddresses:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getAllAddresses');
   }
 };
 
@@ -284,6 +301,6 @@ export const deleteAddress = async (req, res) => {
     await addr.update({ is_active: false, modified_on: new Date() });
     return res.json({ success: true, message: "Location deleted" });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteAddress');
   }
 };

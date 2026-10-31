@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import db from '../models/index.js';
 import env from '../config/env.js';
+import { respondWithError } from './errorHandler.js';
 
 const { User, AdminProfile, UserRole, MasterRole, MasterRolePrivilage, MasterPrivilage } = db;
 
@@ -40,12 +41,20 @@ export const authenticateAdmin = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'No token provided. Unauthorized.' });
     }
 
-    const token   = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, env.JWT_SECRET);
+    const token = authHeader.split(' ')[1];
+    let decoded;
+    try {
+      decoded = jwt.verify(token, env.JWT_SECRET);
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ success: false, message: 'Token expired. Please login again.' });
+      }
+      return res.status(401).json({ success: false, message: 'Invalid token.' });
+    }
 
-    // Verify the user exists and is an admin
+    // Verify the user exists, is active and is an admin
     const user = await User.findByPk(decoded.id);
-    if (!user || user.user_type !== 2) {
+    if (!user || user.is_active === false || user.user_type !== 2) {
       return res.status(401).json({ success: false, message: 'Not an admin account.' });
     }
 
@@ -69,13 +78,13 @@ export const authenticateAdmin = async (req, res, next) => {
       role,
       permissions,
     };
+    req.user = { id: decoded.id, email: decoded.email }; // what the audit fields (created_by / modified_by) read
+    req.auth = { id: decoded.id, userType: 2, isAdmin: true };
 
     next();
   } catch (err) {
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ success: false, message: 'Token expired. Please login again.' });
-    }
-    return res.status(401).json({ success: false, message: 'Invalid token.' });
+    // A database failure is not a bad token: answering 401 would sign the admin out during a brief outage
+    return respondWithError(req, res, err, 'authenticateAdmin');
   }
 };
 

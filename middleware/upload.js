@@ -1,6 +1,9 @@
 import multer from "multer";
 import cloudinary from "cloudinary";
 import { Readable } from "stream";
+import { putFile, deleteFile } from "../services/storage.service.js";
+
+export const usesS3 = () => (process.env.STORAGE_PROVIDER || "cloudinary").toLowerCase() === "s3";
 
 cloudinary.v2.config({
   cloud_name: process.env.CLOUD_NAME,
@@ -8,11 +11,16 @@ cloudinary.v2.config({
   api_secret: process.env.CLOUD_SECRET
 });
 
-// Multer memory storage
-const upload = multer({ storage: multer.memoryStorage() });
+// Multer memory storage. Files are held in RAM until they reach Cloudinary, so the limits matter: without them a
+// single request could send a multi-gigabyte body and exhaust the server's memory. (Handlers also check 5 MB per file.)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 6 * 1024 * 1024, files: 40, fields: 100, fieldSize: 256 * 1024 },
+});
 
 // Convert buffer to stream and upload
 export const uploadToCloudinary = async (fileBuffer, folder = "users", resourceType = "auto", originalName = null) => {
+  if (usesS3()) return putFile(fileBuffer, folder); // STORAGE_PROVIDER=s3: same { public_id, secure_url } result
   return new Promise((resolve, reject) => {
     const options = { 
       folder, 
@@ -38,6 +46,13 @@ export const uploadToCloudinary = async (fileBuffer, folder = "users", resourceT
     const readStream = Readable.from(fileBuffer);
     readStream.pipe(stream);
   });
+};
+
+/** Removes a stored file from whichever provider is active (never throws). */
+export const destroyUpload = async (id, resourceType = "image") => {
+  if (!id) return;
+  if (usesS3()) return deleteFile(id);
+  await cloudinary.v2.uploader.destroy(id, resourceType === "image" ? undefined : { resource_type: resourceType }).catch(() => {});
 };
 
 export default upload;

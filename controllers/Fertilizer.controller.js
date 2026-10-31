@@ -1,7 +1,8 @@
 import db from "../models/index.js";
 import { Op } from "sequelize";
-import cloudinary from "cloudinary";
-import { uploadToCloudinary } from "../middleware/upload.js";
+import { uploadToCloudinary, destroyUpload } from "../middleware/upload.js";
+import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { Fertilizer } = db;
 
@@ -62,7 +63,7 @@ export const createFertilizer = async (req, res) => {
     res.status(201).json({ success: true, data: fertilizer, message: "Fertilizer created successfully" });
   } catch (error) {
     console.error("Create fertilizer error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createFertilizer');
   }
 };
 
@@ -111,8 +112,8 @@ export const getAllFertilizers = async (req, res) => {
       }
     }
 
-    const limit = pageSize ? parseInt(pageSize) : 10;
-    const offset = page ? (parseInt(page) - 1) * limit : 0;
+    const limit = clampLimit(pageSize, 10);
+    const offset = (clampPage(page) - 1) * limit;
 
     const { count, rows } = await Fertilizer.findAndCountAll({
       where: condition,
@@ -126,12 +127,12 @@ export const getAllFertilizers = async (req, res) => {
       data: rows,
       totalCount: count,
       totalPages: Math.ceil(count / limit),
-      page: page ? parseInt(page) : 1,
+      page: clampPage(page),
       pageSize: limit
     });
   } catch (error) {
     console.error("Get fertilizers error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getAllFertilizers');
   }
 };
 
@@ -148,7 +149,7 @@ export const getFertilizerById = async (req, res) => {
     res.json({ success: true, data: fertilizer });
   } catch (error) {
     console.error("Get fertilizer by ID error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getFertilizerById');
   }
 };
 
@@ -197,7 +198,7 @@ export const updateFertilizer = async (req, res) => {
     if (req.file) {
       // Delete old image from Cloudinary if exists
       if (fertilizer.fertilizer_image_new_name) {
-        await cloudinary.v2.uploader.destroy(fertilizer.fertilizer_image_new_name).catch(() => {});
+        await destroyUpload(fertilizer.fertilizer_image_new_name);
       }
       const result = await uploadToCloudinary(req.file.buffer, "fertilizers");
       imageData = {
@@ -208,7 +209,7 @@ export const updateFertilizer = async (req, res) => {
     } else if (req.body.removeImage === "true") {
       // Delete old image from Cloudinary if exists and set DB fields to null
       if (fertilizer.fertilizer_image_new_name) {
-        await cloudinary.v2.uploader.destroy(fertilizer.fertilizer_image_new_name).catch(() => {});
+        await destroyUpload(fertilizer.fertilizer_image_new_name);
       }
       imageData = {
         fertilizer_image_original_name: null,
@@ -231,7 +232,7 @@ export const updateFertilizer = async (req, res) => {
     res.json({ success: true, data: fertilizer, message: "Fertilizer updated successfully" });
   } catch (error) {
     console.error("Update fertilizer error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updateFertilizer');
   }
 };
 
@@ -247,13 +248,13 @@ export const deleteFertilizer = async (req, res) => {
 
     // Delete image from Cloudinary if exists
     if (fertilizer.fertilizer_image_new_name) {
-      await cloudinary.v2.uploader.destroy(fertilizer.fertilizer_image_new_name).catch(() => {});
+      await destroyUpload(fertilizer.fertilizer_image_new_name);
     }
 
     await fertilizer.destroy();
     res.json({ success: true, message: "Fertilizer deleted successfully" });
   } catch (error) {
     console.error("Delete fertilizer error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteFertilizer');
   }
 };

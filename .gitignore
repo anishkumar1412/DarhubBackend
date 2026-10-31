@@ -1,4 +1,16 @@
 node_modules/
 .env
 .vscode/
-scratch/
+scratch/.floci-data/
+
+.env.*
+!.env.example
+!.env.local.example
+
+# LGD csv files downloaded by `npm run db:seed:locations` (about 60 MB)
+lgd-data/
+
+# Firebase service-account keys: secrets that can push to every user. Never commit.
+*firebase-adminsdk*.json
+firebase-service-account*.json
+google-services.json

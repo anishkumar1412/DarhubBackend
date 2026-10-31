@@ -1,6 +1,7 @@
 import db from '../models/index.js';
-import { uploadToCloudinary } from '../middleware/upload.js';
-import cloudinary from 'cloudinary';
+import { uploadToCloudinary, destroyUpload } from '../middleware/upload.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const {
   Vendor,
@@ -37,7 +38,7 @@ const uploadFile = async (file, folder) => {
 const deleteCloudinaryAsset = async (public_id) => {
   if (!public_id) return;
   try {
-    await cloudinary.v2.uploader.destroy(public_id, { resource_type: 'raw' });
+    await destroyUpload(public_id, 'raw');
   } catch (_) {}
 };
 
@@ -213,7 +214,7 @@ export const createVendor = async (req, res) => {
   } catch (err) {
     await t.rollback();
     console.error('createVendor error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'createVendor');
   }
 };
 
@@ -235,11 +236,11 @@ export const getAllVendors = async (req, res) => {
       ];
     }
 
-    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 10);
 
     const { count, rows } = await Vendor.findAndCountAll({
       where,
-      limit: parseInt(limit, 10),
+      limit: clampLimit(limit, 10),
       offset,
       order: [['id', 'DESC']],
     });
@@ -249,14 +250,14 @@ export const getAllVendors = async (req, res) => {
       data: rows,
       pagination: {
         total: count,
-        page: parseInt(page, 10),
-        limit: parseInt(limit, 10),
-        totalPages: Math.ceil(count / parseInt(limit, 10)),
+        page: clampPage(page),
+        limit: clampLimit(limit, 10),
+        totalPages: Math.ceil(count / clampLimit(limit, 10)),
       },
     });
   } catch (err) {
     console.error('getAllVendors error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'getAllVendors');
   }
 };
 
@@ -287,7 +288,7 @@ export const getVendorById = async (req, res) => {
     });
   } catch (err) {
     console.error('getVendorById error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'getVendorById');
   }
 };
 
@@ -529,7 +530,7 @@ export const updateVendor = async (req, res) => {
   } catch (err) {
     await t.rollback();
     console.error('updateVendor error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'updateVendor');
   }
 };
 
@@ -609,6 +610,6 @@ export const deleteVendor = async (req, res) => {
   } catch (err) {
     await t.rollback();
     console.error('deleteVendor error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Internal server error.' });
+    return respondWithError(req, res, err, 'deleteVendor');
   }
 };

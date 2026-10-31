@@ -6,6 +6,8 @@
  */
 
 import db from '../models/index.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { InventoryShipment, Op } = db;
 
@@ -57,7 +59,7 @@ export const createShipment = async (req, res) => {
     return res.status(201).json({ success: true, data: shipment, message: 'Shipment created successfully.' });
   } catch (err) {
     console.error('createShipment error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'createShipment');
   }
 };
 
@@ -94,12 +96,12 @@ export const getAllShipments = async (req, res) => {
     if (status) andConditions.push({ status: { [Op.like]: `%${status}%` } });
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await InventoryShipment.findAndCountAll({
       where,
       order: [['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
     });
 
@@ -107,12 +109,12 @@ export const getAllShipments = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllShipments error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllShipments');
   }
 };
 
@@ -146,7 +148,7 @@ export const getShipmentById = async (req, res) => {
     });
   } catch (err) {
     console.error('getShipmentById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getShipmentById');
   }
 };
 
@@ -192,7 +194,7 @@ export const updateShipment = async (req, res) => {
     return res.status(200).json({ success: true, data: shipment, message: 'Shipment updated successfully.' });
   } catch (err) {
     console.error('updateShipment error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updateShipment');
   }
 };
 
@@ -217,7 +219,7 @@ export const updateShipmentStatus = async (req, res) => {
     return res.status(200).json({ success: true, data: shipment, message: `Shipment status updated to '${status}'.` });
   } catch (err) {
     console.error('updateShipmentStatus error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updateShipmentStatus');
   }
 };
 
@@ -236,7 +238,7 @@ export const deleteShipment = async (req, res) => {
     return res.status(200).json({ success: true, message: 'Shipment deleted successfully.' });
   } catch (err) {
     console.error('deleteShipment error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deleteShipment');
   }
 };
 
@@ -264,6 +266,6 @@ export const getShipmentStats = async (req, res) => {
     });
   } catch (err) {
     console.error('getShipmentStats error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getShipmentStats');
   }
 };

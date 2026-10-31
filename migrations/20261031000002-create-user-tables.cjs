@@ -1,0 +1,152 @@
+'use strict';
+/**
+ * Users, profiles, addresses, bank/UPI/KYC documents and OTPs.
+ *
+ * Baseline schema, generated from the Sequelize models as they were at the first release. A fresh database gets
+ * every table below; a database that was built earlier by sequelize.sync() keeps its tables and data (nothing is
+ * altered or dropped) and only gains columns it is missing — see migrations/helpers/schema.cjs.
+ */
+const Sequelize = require('sequelize');
+const { ensureTables, dropTables } = require('./helpers/schema.cjs');
+
+const TABLES = [
+  ['USER', {
+    id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
+    email: { type: Sequelize.STRING, allowNull: true },
+    password: { type: Sequelize.STRING, allowNull: true },
+    username: { type: Sequelize.STRING, allowNull: true },
+    mobile_number: { type: Sequelize.STRING, allowNull: true },
+    is_superuser: { type: Sequelize.BOOLEAN, allowNull: true },
+    user_type: { type: Sequelize.INTEGER, allowNull: true },
+    refresh_token: { type: Sequelize.TEXT, allowNull: true },
+    isMobileVerify: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: false },
+    isEmailVerify: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: false },
+    user_ref_id: { type: Sequelize.STRING, allowNull: true },
+    is_active: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+    created_on: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
+    created_by: { type: Sequelize.INTEGER, allowNull: true },
+    modified_on: { type: Sequelize.DATE, allowNull: true },
+    modified_by: { type: Sequelize.INTEGER, allowNull: true },
+    createdAt: { type: Sequelize.DATE, allowNull: false },
+    updatedAt: { type: Sequelize.DATE, allowNull: false },
+  }],
+  ['USER_PROFILE', {
+    id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
+    user_id: { type: Sequelize.INTEGER, allowNull: false },
+    first_name: { type: Sequelize.STRING, allowNull: false },
+    last_name: { type: Sequelize.STRING, allowNull: true },
+    whatsapp_number: { type: Sequelize.STRING, allowNull: true },
+    user_image_original_filename: { type: Sequelize.STRING, allowNull: true },
+    user_image_new_filename: { type: Sequelize.STRING, allowNull: true },
+    user_image_url: { type: Sequelize.STRING, allowNull: true },
+    aadhar_number: { type: Sequelize.STRING, allowNull: true },
+    pan_card_number: { type: Sequelize.STRING, allowNull: true },
+    dob: { type: Sequelize.DATE, allowNull: true },
+    is_active: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+    created_on: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
+    created_by: { type: Sequelize.INTEGER, allowNull: true },
+    modified_on: { type: Sequelize.DATE, allowNull: true },
+    modified_by: { type: Sequelize.INTEGER, allowNull: true },
+    createdAt: { type: Sequelize.DATE, allowNull: false },
+    updatedAt: { type: Sequelize.DATE, allowNull: false },
+  }],
+  ['USER_ROLE', {
+    id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
+    user_id: { type: Sequelize.INTEGER, allowNull: true },
+    role_id: { type: Sequelize.INTEGER, allowNull: true },
+    is_active: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+    created_on: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
+    created_by: { type: Sequelize.INTEGER, allowNull: true },
+    modified_on: { type: Sequelize.DATE, allowNull: true },
+    modified_by: { type: Sequelize.INTEGER, allowNull: true },
+    createdAt: { type: Sequelize.DATE, allowNull: false },
+    updatedAt: { type: Sequelize.DATE, allowNull: false },
+  }],
+  ['USER_ADDRESS', {
+    id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
+    user_id: { type: Sequelize.INTEGER, allowNull: false },
+    lane_1: { type: Sequelize.STRING, allowNull: true },
+    lane_2: { type: Sequelize.STRING, allowNull: true },
+    state: { type: Sequelize.INTEGER, allowNull: true },
+    district: { type: Sequelize.INTEGER, allowNull: true },
+    block: { type: Sequelize.INTEGER, allowNull: true },
+    village: { type: Sequelize.STRING, allowNull: true },
+    pincode: { type: Sequelize.STRING, allowNull: true },
+    is_primary: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: false },
+    is_active: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+    created_on: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
+    created_by: { type: Sequelize.INTEGER, allowNull: true },
+    modified_on: { type: Sequelize.DATE, allowNull: true },
+    modified_by: { type: Sequelize.INTEGER, allowNull: true },
+    createdAt: { type: Sequelize.DATE, allowNull: false },
+    updatedAt: { type: Sequelize.DATE, allowNull: false },
+  }],
+  ['USER_BANK_DETAILS', {
+    id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
+    user_id: { type: Sequelize.INTEGER, allowNull: false },
+    bank_name: { type: Sequelize.STRING(200), allowNull: false },
+    acc_holder_name: { type: Sequelize.STRING(200), allowNull: false },
+    acc_number: { type: Sequelize.STRING(50), allowNull: false },
+    ifsc_code: { type: Sequelize.STRING(20), allowNull: false },
+    passbook_image_url: { type: Sequelize.TEXT, allowNull: true },
+    is_primary: { type: Sequelize.BOOLEAN, allowNull: true, defaultValue: false },
+    is_active: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+    created_on: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
+    created_by: { type: Sequelize.INTEGER, allowNull: true },
+    modified_on: { type: Sequelize.DATE, allowNull: true },
+    modified_by: { type: Sequelize.INTEGER, allowNull: true },
+  }],
+  ['USER_UPI_DETAILS', {
+    id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
+    user_id: { type: Sequelize.INTEGER, allowNull: false },
+    upi_id: { type: Sequelize.STRING(200), allowNull: false },
+    is_active: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+    created_on: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
+    created_by: { type: Sequelize.INTEGER, allowNull: true },
+    modified_on: { type: Sequelize.DATE, allowNull: true },
+    modified_by: { type: Sequelize.INTEGER, allowNull: true },
+  }],
+  ['USER_DOCUMENTS', {
+    id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
+    user_id: { type: Sequelize.INTEGER, allowNull: true },
+    document_type: { type: Sequelize.INTEGER, allowNull: true },
+    document_original_name: { type: Sequelize.STRING, allowNull: true },
+    document_new_name: { type: Sequelize.STRING, allowNull: true },
+    document_url: { type: Sequelize.STRING, allowNull: true },
+    is_active: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+    created_on: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
+    created_by: { type: Sequelize.INTEGER, allowNull: true },
+    modified_on: { type: Sequelize.DATE, allowNull: true },
+    modified_by: { type: Sequelize.INTEGER, allowNull: true },
+    createdAt: { type: Sequelize.DATE, allowNull: false },
+    updatedAt: { type: Sequelize.DATE, allowNull: false },
+  }],
+  ['OTP_VERIFICATION', {
+    id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true, allowNull: false },
+    email: { type: Sequelize.STRING, allowNull: true },
+    mobile_number: { type: Sequelize.STRING, allowNull: true },
+    email_otp: { type: Sequelize.STRING, allowNull: true },
+    mobile_otp: { type: Sequelize.STRING, allowNull: true },
+    expires_at: { type: Sequelize.DATE, allowNull: false },
+    is_email_verified: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: false },
+    is_mobile_verified: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: false },
+    attempts: { type: Sequelize.INTEGER, allowNull: false, defaultValue: 0 },
+    is_active: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+    created_on: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
+    created_by: { type: Sequelize.INTEGER, allowNull: true },
+    modified_on: { type: Sequelize.DATE, allowNull: true },
+    modified_by: { type: Sequelize.INTEGER, allowNull: true },
+    createdAt: { type: Sequelize.DATE, allowNull: false },
+    updatedAt: { type: Sequelize.DATE, allowNull: false },
+  }],
+];
+
+module.exports = {
+  async up(queryInterface) {
+    await ensureTables(queryInterface, TABLES);
+  },
+
+  async down(queryInterface) {
+    await dropTables(queryInterface, TABLES);
+  },
+};

@@ -54,6 +54,8 @@
  */
 
 import db from "../models/index.js";
+import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { Drone1, User, UserProfile, UserRole, MasterRole, SprayingDailyLogs, Op } = db;
 
@@ -178,19 +180,19 @@ export const getAllDroneStatuses = async (req, res) => {
 
     const allDrones = await getDronesWithPilotInfo(where);
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const paginated = allDrones.slice(offset, offset + parseInt(limit));
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 50);
+    const paginated = allDrones.slice(offset, offset + clampLimit(limit, 50));
 
     return res.status(200).json({
       success: true,
       data: paginated,
       total: allDrones.length,
-      page: parseInt(page),
-      totalPages: Math.ceil(allDrones.length / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(allDrones.length / clampLimit(limit, 50)),
     });
   } catch (err) {
     console.error("getAllDroneStatuses error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'getAllDroneStatuses');
   }
 };
 
@@ -277,7 +279,7 @@ export const getActiveDrones = async (req, res) => {
     });
   } catch (err) {
     console.error("getActiveDrones error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'getActiveDrones');
   }
 };
 
@@ -327,7 +329,7 @@ export const updateDroneStatus = async (req, res) => {
     });
   } catch (err) {
     console.error("updateDroneStatus error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'updateDroneStatus');
   }
 };
 
@@ -365,7 +367,7 @@ export const resetDailyStatus = async (req, res) => {
     });
   } catch (err) {
     console.error("resetDailyStatus error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'resetDailyStatus');
   }
 };
 
@@ -471,6 +473,6 @@ export const getActivePilots = async (req, res) => {
     });
   } catch (err) {
     console.error("getActivePilots error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'getActivePilots');
   }
 };

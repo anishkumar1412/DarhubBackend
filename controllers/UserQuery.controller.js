@@ -1,4 +1,5 @@
 import db from "../models/index.js";
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { User, UserProfile, UserAddress, UserRole } = db;
 
@@ -61,7 +62,7 @@ export const getUsersByRole = async (req, res) => {
     return res.status(200).json(formattedUsers);
   } catch (error) {
     console.error("Get Users By Role Error:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getUsersByRole');
   }
 };
 
@@ -74,6 +75,9 @@ export const getUserAddresses = async (req, res) => {
 
     if (user_id !== undefined && user_id !== null && user_id !== "") {
       targetUserId = Number(user_id);
+      if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+        return res.status(400).json({ success: false, error: "user_id must be a positive whole number" });
+      }
 
       // Verify if the user exists
       const user = await User.findByPk(targetUserId, { attributes: ["id"] });
@@ -117,6 +121,6 @@ export const getUserAddresses = async (req, res) => {
     return res.status(200).json(addresses);
   } catch (error) {
     console.error("Get User Addresses Error:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getUserAddresses');
   }
 };

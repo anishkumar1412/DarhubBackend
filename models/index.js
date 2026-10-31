@@ -1,5 +1,6 @@
 import Sequelize, { DataTypes, QueryTypes } from 'sequelize';
 import db1 from '../config/db.js';
+import env from '../config/env.js';
 import logger from '../utils/logger.js';
 
 // ── Existing models ───────────────────────────────────────────────
@@ -21,6 +22,7 @@ import MasterBlock from './MasterBlock.js';
 import MasterBolt from './MasterBolt.js';
 import MasterCharger from './MasterCharger.js';
 import MasterCrop from './MasterCrop.js';
+import ColumnSettings from './ColumnSettings.js';
 import MasterCupon from './MasterCupon.js';
 import MasterDistrict from './MasterDistrict.js';
 import MasterGramPanchayat from './MasterGramPanchayat.js';
@@ -51,6 +53,11 @@ import UserUpiDetails from './UserUpiDetails.js';
 import UserBankDetails from './UserBankDetails.js';
 import UserDocuments from './UserDocuments.js';
 import OtpVerification from './OtpVerification.js';
+import IdempotencyKey from './IdempotencyKey.js';
+import DeviceToken from './DeviceToken.js';
+import Notification from './Notification.js';
+import NotificationDelivery from './NotificationDelivery.js';
+import NotificationPreference from './NotificationPreference.js';
 
 // ── Inventory & Sales/Purchase Order models (NEW) ───────────────────
 import Category from './Category.js';
@@ -100,7 +107,7 @@ const sequelize = new Sequelize(
     dialect: db1.DIALECT,
     port: db1.port,
     logging: false,
-    dialectOptions: {
+    dialectOptions: db1.SSL === false ? {} : {
       ssl: {
         require: true,
         rejectUnauthorized: false,
@@ -158,6 +165,7 @@ const db = {
   MasterBolt: MasterBolt(sequelize, DataTypes),
   MasterCharger: MasterCharger(sequelize, DataTypes),
   MasterCrop: MasterCrop(sequelize, DataTypes),
+  ColumnSettings: ColumnSettings(sequelize, DataTypes),
   MasterCupon: MasterCupon(sequelize, DataTypes),
   MasterDistrict: MasterDistrict(sequelize, DataTypes),
   MasterGramPanchayat: MasterGramPanchayat(sequelize, DataTypes),
@@ -208,6 +216,12 @@ const db = {
   UserBankDetails: UserBankDetails(sequelize, DataTypes),
   UserDocuments: UserDocuments(sequelize, DataTypes),
   OtpVerification: OtpVerification(sequelize, DataTypes),
+  IdempotencyKey: IdempotencyKey(sequelize, DataTypes),
+  // Push notifications (docs/PUSH_NOTIFICATIONS.md)
+  DeviceToken: DeviceToken(sequelize, DataTypes),
+  Notification: Notification(sequelize, DataTypes),
+  NotificationDelivery: NotificationDelivery(sequelize, DataTypes),
+  NotificationPreference: NotificationPreference(sequelize, DataTypes),
   // Inventory dashboard models
   InventoryAccessory: InventoryAccessory(sequelize, DataTypes),
   InventoryDrone: InventoryDrone(sequelize, DataTypes),
@@ -226,6 +240,12 @@ const db = {
 };
 
 // 🪛 Pilot Maintenance Associations 🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛🪛
+// Push notifications: an inbox row has one delivery per device; a device belongs to a user
+db.Notification.hasMany(db.NotificationDelivery, { foreignKey: 'notification_id', as: 'deliveries' });
+db.NotificationDelivery.belongsTo(db.Notification, { foreignKey: 'notification_id', as: 'notification' });
+db.DeviceToken.hasMany(db.NotificationDelivery, { foreignKey: 'device_token_id', as: 'deliveries' });
+db.NotificationDelivery.belongsTo(db.DeviceToken, { foreignKey: 'device_token_id', as: 'device' });
+
 db.PilotMaintenanceTask.hasMany(db.PilotMaintenanceChecklist, {
   foreignKey: 'task_id',
   as: 'checklist',
@@ -288,17 +308,22 @@ db.SprayingOrderExtras.belongsTo(db.SprayingOrder, {
   as: 'order',
 });
 
-// Export a promise that resolves once all tables are synced.
-// server.js awaits this before running the super-admin bootstrap.
-export const syncPromise = sequelize
-  .sync({ alter: false })
-  .then(() => {
-    logger.info('✅ All models were synchronized successfully.');
-  })
-  .catch((err) => {
-    logger.error('❌ Sync error', err);
-    throw err;
-  });
+// The database schema is created and changed ONLY by migrations (`npm run db:migrate`, see docs/DATABASE.md).
+// Creating tables from the models on boot is opt-in (DB_SYNC=true) and meant for throwaway databases such as the
+// e2e tests: sync() cannot add a column to, or drop one from, an existing table, so a model change would silently
+// diverge from the live schema without a migration to review.
+// server.js and the scripts await this promise before they touch the database.
+export const syncPromise = env.DB_SYNC
+  ? sequelize
+    .sync({ alter: false })
+    .then(() => {
+      logger.info('✅ All models were synchronized successfully (DB_SYNC=true).');
+    })
+    .catch((err) => {
+      logger.error('❌ Sync error', err);
+      throw err;
+    })
+  : Promise.resolve();
 
 export default db;
 

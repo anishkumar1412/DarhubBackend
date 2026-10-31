@@ -7,6 +7,8 @@
  */
 
 import db from '../models/index.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { PurchaseOrder, MaintenanceLog, InventoryAccessory, Vendor, InventoryShipment, Op } = db;
 
@@ -103,7 +105,7 @@ export const createPurchaseOrder = async (req, res) => {
     return res.status(201).json({ success: true, data: po, message: 'Purchase Order generated successfully.' });
   } catch (err) {
     console.error('createPurchaseOrder error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'createPurchaseOrder');
   }
 };
 
@@ -133,12 +135,12 @@ export const getAllPurchaseOrders = async (req, res) => {
     if (status) andConditions.push({ status: { [Op.like]: `%${status}%` } });
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await PurchaseOrder.findAndCountAll({
       where,
       order: [['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
     });
 
@@ -146,12 +148,12 @@ export const getAllPurchaseOrders = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllPurchaseOrders error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllPurchaseOrders');
   }
 };
 
@@ -168,7 +170,7 @@ export const getPurchaseOrderById = async (req, res) => {
     return res.status(200).json({ success: true, data: po });
   } catch (err) {
     console.error('getPurchaseOrderById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getPurchaseOrderById');
   }
 };
 
@@ -212,7 +214,7 @@ export const updatePurchaseOrder = async (req, res) => {
     return res.status(200).json({ success: true, data: po, message: 'Purchase Order updated successfully.' });
   } catch (err) {
     console.error('updatePurchaseOrder error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updatePurchaseOrder');
   }
 };
 
@@ -254,7 +256,7 @@ export const updatePOStatus = async (req, res) => {
     return res.status(200).json({ success: true, data: po, message: `PO status updated to '${status}'.` });
   } catch (err) {
     console.error('updatePOStatus error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updatePOStatus');
   }
 };
 
@@ -273,6 +275,6 @@ export const deletePurchaseOrder = async (req, res) => {
     return res.status(200).json({ success: true, message: 'Purchase Order deleted successfully.' });
   } catch (err) {
     console.error('deletePurchaseOrder error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deletePurchaseOrder');
   }
 };

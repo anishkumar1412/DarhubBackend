@@ -1,0 +1,25 @@
+# Local PostgreSQL for development: docker compose -f docker-compose.local-db.yml up -d
+# Then: cp .env.local.example .env.local && npm run db:setup:local   (see docs/DATABASE.md)
+# Port 55433 and the volume name are deliberately different from the e2e test database (55432, tests/e2e/run.sh).
+name: darhub-local-db   # own compose project, so it never mixes with docker-compose.floci.yml
+services:
+  darhub-local-pg:
+    image: postgres:14
+    container_name: darhub-local-pg
+    environment:
+      POSTGRES_USER: darhub
+      POSTGRES_PASSWORD: darhub_local_pw
+      POSTGRES_DB: darhub_local
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - darhub_local_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U darhub -d darhub_local"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  darhub_local_pgdata:
