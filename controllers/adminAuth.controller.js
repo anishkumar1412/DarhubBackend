@@ -8,6 +8,7 @@ import { ApiResponse } from '../utils/apiResponse.js';
 import { ApiError } from '../utils/apiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import logger from '../utils/logger.js';
+import { loadAdminAccess } from '../middleware/adminAuth.middleware.js';
 import {
   generateOneTimeToken,
   hashToken,
@@ -35,27 +36,6 @@ const {
 } = db;
 
 // ── helpers ────────────────────────────────────────────────────────
-
-const loadPermissions = async (userId) => {
-  const userRole = await UserRole.findOne({ where: { user_id: userId } });
-  if (!userRole) return [];
-
-  const rolePrivs = await MasterRolePrivilage.findAll({
-    where: { role_id: userRole.role_id },
-  });
-  const privIds = rolePrivs.map((rp) => rp.privilage_id);
-  if (!privIds.length) return [];
-
-  const privs = await MasterPrivilage.findAll({ where: { id: privIds } });
-  return privs.map((p) => p.privilage_name);
-};
-
-const loadRole = async (userId) => {
-  const userRole = await UserRole.findOne({ where: { user_id: userId } });
-  if (!userRole) return null;
-  const role = await MasterRole.findByPk(userRole.role_id);
-  return role?.role_name || null;
-};
 
 const signToken = (payload) =>
   jwt.sign(payload, env.JWT_SECRET, {
@@ -112,16 +92,14 @@ export const adminLoginController = asyncHandler(async (req, res) => {
   resetLoginAttempts(email);
 
   // Load permissions & role
-  const [permissions, role] = await Promise.all([
-    loadPermissions(user.id),
-    loadRole(user.id),
-  ]);
+  const { permissions, role } = await loadAdminAccess(user.id);
 
   // Issue JWT
   const token = signToken({ id: user.id, email: user.email, user_type: 2 });
 
   // Update last_login
-  await profile.update({ last_login: new Date() });
+  // Not awaited: the admin must not wait a database round trip just to have "last login" stamped
+  profile.update({ last_login: new Date() }).catch((err) => logger.warn(`Could not store last_login: ${err.message}`));
 
   return res
     .status(200)

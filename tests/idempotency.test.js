@@ -59,8 +59,12 @@ test('idempotency: 10 simultaneous copies create exactly one order; the others r
     },
   });
   await withServer(app, async (post) => {
-    const copies = Array.from({ length: 10 }, () => post({ acres: 3 }, { 'Idempotency-Key': KEY }));
-    await new Promise((r) => setTimeout(r, 100));
+    let answered = 0;
+    const copies = Array.from({ length: 10 }, () => post({ acres: 3 }, { 'Idempotency-Key': KEY }).then((r) => { answered += 1; return r; }));
+    // Release the running request only once the 9 duplicates were answered. A fixed sleep raced with the first
+    // fetch's connection setup (100-500 ms): copies arriving after the release are replayed (201), not told to wait.
+    const deadline = Date.now() + 5000;
+    while (answered < 9 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
     release();
     const results = await Promise.all(copies);
     assert.equal(state.created, 1);
