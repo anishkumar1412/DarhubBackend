@@ -22,6 +22,7 @@
  */
 
 import db from "../models/index.js";
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { InventoryAccessory, Drone1, MaintenanceLog, InventoryShipment, User, UserRole, MasterRole,InventoryDrone, Op, sequelize } = db;
 
@@ -117,6 +118,6 @@ export const getDashboardSummary = async (req, res) => {
     });
   } catch (err) {
     console.error("getDashboardSummary error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'getDashboardSummary');
   }
 };

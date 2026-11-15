@@ -1,8 +1,9 @@
 import { Op } from "sequelize";
 import db from "../models/index.js";
-import upload, { uploadToCloudinary } from "../middleware/upload.js" // ← import from your cloudinary util
+import upload, { uploadToCloudinary, destroyUpload } from "../middleware/upload.js" // ← import from your cloudinary util
 
 const { MasterCrop } = db;
+import { respondWithError } from '../middleware/errorHandler.js';
 
 // Re-export upload so cropRoutes.js can import it from here
 export { upload };
@@ -43,7 +44,7 @@ export const createCrop = async (req, res) => {
     return res.status(201).json({ success: true, message: "Crop created successfully", data: crop });
   } catch (error) {
     console.error("Error in createCrop:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'createCrop');
   }
 };
 
@@ -68,7 +69,7 @@ export const updateCrop = async (req, res) => {
     if (req.file) {
       // Delete old image from Cloudinary if exists
       if (crop.crop_image_new_name) {
-        await cloudinary.v2.uploader.destroy(crop.crop_image_new_name).catch(() => {});
+        await destroyUpload(crop.crop_image_new_name);
       }
       const result = await uploadToCloudinary(req.file.buffer, "crops");
       imageData = {
@@ -89,7 +90,7 @@ export const updateCrop = async (req, res) => {
     return res.status(200).json({ success: true, message: "Crop updated successfully", data: crop });
   } catch (error) {
     console.error("Error in updateCrop:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'updateCrop');
   }
 };
 
@@ -136,7 +137,7 @@ export const filterCrops = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in filterCrops:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'filterCrops');
   }
 };
 
@@ -146,7 +147,7 @@ export const getCropById = async (req, res) => {
     if (!crop) return res.status(404).json({ success: false, message: "Crop not found" });
     return res.status(200).json({ success: true, data: crop });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'getCropById');
   }
 };
 
@@ -157,6 +158,6 @@ export const deleteCrop = async (req, res) => {
     await crop.update({ is_active: false, modified_on: new Date() });
     return res.status(200).json({ success: true, message: "Crop deleted successfully" });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    return respondWithError(req, res, error, 'deleteCrop');
   }
 };

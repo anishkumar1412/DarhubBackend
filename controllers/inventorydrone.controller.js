@@ -6,6 +6,8 @@
  */
 
 import db from '../models/index.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { InventoryDrone, Op } = db;
 
@@ -44,7 +46,7 @@ export const createDrone = async (req, res) => {
     return res.status(201).json({ success: true, data: drone, message: 'Drone created successfully.' });
   } catch (err) {
     console.error('createDrone error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'createDrone');
   }
 };
 
@@ -76,12 +78,12 @@ export const getAllDrones = async (req, res) => {
 
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await InventoryDrone.findAndCountAll({
       where,
       order: [['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
     });
 
@@ -89,12 +91,12 @@ export const getAllDrones = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllDrones error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllDrones');
   }
 };
 
@@ -111,7 +113,7 @@ export const getDroneById = async (req, res) => {
     return res.status(200).json({ success: true, data: drone });
   } catch (err) {
     console.error('getDroneById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getDroneById');
   }
 };
 
@@ -149,7 +151,7 @@ export const updateDrone = async (req, res) => {
     return res.status(200).json({ success: true, data: drone, message: 'Drone updated successfully.' });
   } catch (err) {
     console.error('updateDrone error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updateDrone');
   }
 };
 
@@ -168,7 +170,7 @@ export const deleteDrone = async (req, res) => {
     return res.status(200).json({ success: true, message: 'Drone deleted successfully.' });
   } catch (err) {
     console.error('deleteDrone error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deleteDrone');
   }
 };
 
@@ -196,6 +198,6 @@ export const getDroneStats = async (req, res) => {
     });
   } catch (err) {
     console.error('getDroneStats error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getDroneStats');
   }
 };

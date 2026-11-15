@@ -1,6 +1,7 @@
 import { Op, Sequelize } from 'sequelize';
 import db from '../models/index.js';
 import ExcelJS from "exceljs";
+import { respondWithError } from '../middleware/errorHandler.js';
 
 // import MasterPropeller from './MasterProperller.js';
 // import MasterBattery from './MasterBattery.js';
@@ -53,6 +54,8 @@ export const createDrone = async (req, res) => {
       water_pump_id,
       is_extension_board,
       extension_board_id,
+      pilot_user_id,
+      co_pilot_user_id,
 
       // Arrays
       drone_arms,
@@ -118,6 +121,8 @@ export const createDrone = async (req, res) => {
         water_pump_id,
         is_extension_board,
         extension_board_id,
+        pilot_user_id: pilot_user_id || null,
+        co_pilot_user_id: co_pilot_user_id || null,
       },
       { transaction }
     );
@@ -238,7 +243,7 @@ export const createDrone = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Error creating drone:", error);
-    return res.status(500).json({ success: false, message: `Internal server error: ${error}` });
+    return respondWithError(req, res, error, 'createDrone');
   }
 };
 
@@ -296,10 +301,7 @@ export const createDrone = async (req, res) => {
 //     return res.status(200).json({ success: true, data: result });
 //   } catch (error) {
 //     console.error("Error fetching drones:", error);
-//     return res.status(500).json({
-//       success: false,
-//       message: `Internal server error: ${error}`,
-//     });
+//     return respondWithError(req, res, error, 'getDrones');
 //   }
 // };
 
@@ -408,10 +410,7 @@ export const createDrone = async (req, res) => {
 
 //   } catch (error) {
 //     console.error('Error fetching drone:', error);
-//     return res.status(500).json({
-//       success: false,
-//       message: `Internal server error: ${error}`
-//     });
+//     return respondWithError(req, res, error, 'getDroneById');
 //   }
 // };
 
@@ -505,10 +504,7 @@ export const getDrones = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching drones:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error.message}`,
-    });
+    return respondWithError(req, res, error, 'getDrones');
   }
 };
 
@@ -573,7 +569,7 @@ export const getDrones = async (req, res) => {
 
 //   } catch (error) {
 //     console.error("Error fetching drone:", error);
-//     return res.status(500).json({ success: false, message: `Internal server error: ${error}` });
+//     return respondWithError(req, res, error, 'getDroneById');
 //   }
 // };
 
@@ -667,10 +663,7 @@ export const getDroneById = async (req, res) => {
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     console.error("Error fetching drone:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error.message}`,
-    });
+    return respondWithError(req, res, error, 'getDroneById');
   }
 };
 
@@ -700,6 +693,8 @@ export const updateDrone = async (req, res) => {
       water_pump_id,
       is_extension_board,
       extension_board_id,
+      pilot_user_id,
+      co_pilot_user_id,
       arms,
       propellers,
       batteries,
@@ -728,6 +723,8 @@ export const updateDrone = async (req, res) => {
         water_pump_id,
         is_extension_board,
         extension_board_id,
+        pilot_user_id: pilot_user_id !== undefined ? pilot_user_id : drone.pilot_user_id,
+        co_pilot_user_id: co_pilot_user_id !== undefined ? co_pilot_user_id : drone.co_pilot_user_id,
         modified_on: new Date(), // ✅ update modify_on timestamp
       },
       { transaction }
@@ -818,10 +815,7 @@ export const updateDrone = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Update drone error:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`,
-    });
+    return respondWithError(req, res, error, 'updateDrone');
   }
 };
 
@@ -852,10 +846,7 @@ export const updateDrone = async (req, res) => {
 //   } catch (error) {
 //     await transaction.rollback();
 //     console.error('Delete drone error:', error);
-//     return res.status(500).json({
-//       success: false,
-//       message: `Internal server error: ${error}`
-//     });
+//     return respondWithError(req, res, error, 'deleteDrone');
 //   }
 // };
 
@@ -948,10 +939,7 @@ export const deleteDrone = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Delete drone error:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`,
-    });
+    return respondWithError(req, res, error, 'deleteDrone');
   }
 };
 
@@ -1013,10 +1001,7 @@ export const filterDronesByArms = async (req, res) => {
 
   } catch (error) {
     console.error("Error filtering drones by arms:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDronesByArms');
   }
 };
 
@@ -1068,10 +1053,7 @@ export const filterDronesByDate = async (req, res) => {
 
   } catch (error) {
     console.error("Error filtering drones by date:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDronesByDate');
   }
 };
 
@@ -1134,10 +1116,7 @@ export const filterDrones = async (req, res) => {
 
   } catch (error) {
     console.error("Error filtering drones:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDrones');
   }
 };
 
@@ -1208,10 +1187,7 @@ export const filterDronesByBattery = async (req, res) => {
 
   } catch (error) {
     console.error("Error filtering drones by battery:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDronesByBattery');
   }
 };
 
@@ -1305,10 +1281,7 @@ export const filterDronesByCharger = async (req, res) => {
 
   } catch (error) {
     console.error("Error filtering drones by charger:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDronesByCharger');
   }
 };
 
@@ -1383,10 +1356,7 @@ export const filterDronesByController = async (req, res) => {
 
   } catch (error) {
     console.error("Error filtering drones by controller:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDronesByController');
   }
 };
 
@@ -1449,10 +1419,7 @@ export const filterDronesByLandingGear = async (req, res) => {
 
   } catch (error) {
     console.error("Error filtering drones by landing gear:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDronesByLandingGear');
   }
 };
 
@@ -1519,10 +1486,7 @@ export const filterDronesByMotors = async (req, res) => {
 
   } catch (error) {
     console.error("Error filtering drones by motors:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDronesByMotors');
   }
 };
 
@@ -1589,10 +1553,7 @@ export const filterDronesByMotors = async (req, res) => {
 
 //   } catch (error) {
 //     console.error("Error in universal drone filter:", error);
-//     return res.status(500).json({
-//       success: false,
-//       message: `Internal server error: ${error}`
-//     });
+//     return respondWithError(req, res, error, 'filterDronesUniversal');
 //   }
 // };
 
@@ -2800,10 +2761,7 @@ if (dronesToReturn && dronesToReturn.length > 0) {
 
   } catch (error) {
     console.error("Error in universal drone filter:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'filterDronesUniversal');
   }
 };
 
@@ -3001,9 +2959,6 @@ export const getDroneByIds = async (req, res) => {
 
   } catch (error) {
     console.error("Error fetching drone:", error);
-    return res.status(500).json({
-      success: false,
-      message: `Internal server error: ${error}`
-    });
+    return respondWithError(req, res, error, 'getDroneByIds');
   }
 };

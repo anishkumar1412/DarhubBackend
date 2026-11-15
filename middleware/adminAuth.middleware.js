@@ -1,31 +1,24 @@
 import jwt from 'jsonwebtoken';
 import db from '../models/index.js';
 import env from '../config/env.js';
+import { respondWithError } from './errorHandler.js';
 
 const { User, AdminProfile, UserRole, MasterRole, MasterRolePrivilage, MasterPrivilage } = db;
 
-// ── Load all permission names for an admin user ──────────────────
-const loadAdminPermissions = async (userId) => {
+// ── Role name + permission names for an admin ─────────────────────
+// Three dependent round trips (role link -> role & its privilege ids together -> privilege names). Admin requests
+// load this on every call and the database is remote, so each avoided round trip is noticeable.
+export const loadAdminAccess = async (userId) => {
   const userRole = await UserRole.findOne({ where: { user_id: userId } });
-  if (!userRole) return [];
+  if (!userRole) return { role: null, permissions: [] };
 
-  const rolePrivs = await MasterRolePrivilage.findAll({
-    where: { role_id: userRole.role_id },
-  });
-
+  const [role, rolePrivs] = await Promise.all([
+    MasterRole.findByPk(userRole.role_id),
+    MasterRolePrivilage.findAll({ where: { role_id: userRole.role_id } }),
+  ]);
   const privIds = rolePrivs.map((rp) => rp.privilage_id);
-  if (!privIds.length) return [];
-
-  const privs = await MasterPrivilage.findAll({ where: { id: privIds } });
-  return privs.map((p) => p.privilage_name);
-};
-
-// ── Load role name for an admin user ─────────────────────────────
-const loadAdminRole = async (userId) => {
-  const userRole = await UserRole.findOne({ where: { user_id: userId } });
-  if (!userRole) return null;
-  const role = await MasterRole.findByPk(userRole.role_id);
-  return role?.role_name || null;
+  const privs = privIds.length ? await MasterPrivilage.findAll({ where: { id: privIds } }) : [];
+  return { role: role?.role_name || null, permissions: privs.map((p) => p.privilage_name) };
 };
 
 // ── authenticateAdmin ────────────────────────────────────────────
@@ -40,17 +33,26 @@ export const authenticateAdmin = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'No token provided. Unauthorized.' });
     }
 
-    const token   = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, env.JWT_SECRET);
-
-    // Verify the user exists and is an admin
-    const user = await User.findByPk(decoded.id);
-    if (!user || user.user_type !== 2) {
-      return res.status(401).json({ success: false, message: 'Not an admin account.' });
+    const token = authHeader.split(' ')[1];
+    let decoded;
+    try {
+      decoded = jwt.verify(token, env.JWT_SECRET);
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ success: false, message: 'Token expired. Please login again.' });
+      }
+      return res.status(401).json({ success: false, message: 'Invalid token.' });
     }
 
-    // Verify the admin profile is activated
-    const profile = await AdminProfile.findOne({ where: { user_id: decoded.id } });
+    // The three lookups are independent, so they run together (they used to run one after another)
+    const [user, profile, access] = await Promise.all([
+      User.findByPk(decoded.id),
+      AdminProfile.findOne({ where: { user_id: decoded.id } }),
+      loadAdminAccess(decoded.id),   // loaded fresh on every request: revoked permissions take effect immediately
+    ]);
+    if (!user || user.is_active === false || user.user_type !== 2) {
+      return res.status(401).json({ success: false, message: 'Not an admin account.' });
+    }
     if (!profile?.is_verified) {
       return res.status(403).json({
         success: false,
@@ -58,24 +60,19 @@ export const authenticateAdmin = async (req, res, next) => {
       });
     }
 
-    // Load permissions fresh on every request —
-    // ensures revoked permissions take effect immediately
-    const permissions = await loadAdminPermissions(decoded.id);
-    const role        = await loadAdminRole(decoded.id);
-
     req.admin = {
       id:          decoded.id,
       email:       decoded.email,
-      role,
-      permissions,
+      role:        access.role,
+      permissions: access.permissions,
     };
+    req.user = { id: decoded.id, email: decoded.email }; // what the audit fields (created_by / modified_by) read
+    req.auth = { id: decoded.id, userType: 2, isAdmin: true };
 
     next();
   } catch (err) {
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ success: false, message: 'Token expired. Please login again.' });
-    }
-    return res.status(401).json({ success: false, message: 'Invalid token.' });
+    // A database failure is not a bad token: answering 401 would sign the admin out during a brief outage
+    return respondWithError(req, res, err, 'authenticateAdmin');
   }
 };
 

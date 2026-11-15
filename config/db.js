@@ -6,7 +6,8 @@ const db = {
   PASSWORD: env.DB_PASSWORD,
   DATABASE: env.DB_NAME,
   port: env.DB_PORT,
-  DIALECT: env.DB_DIALECT
+  DIALECT: env.DB_DIALECT,
+  SSL: env.DB_SSL
 };
 
 export default db;

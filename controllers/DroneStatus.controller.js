@@ -54,6 +54,8 @@
  */
 
 import db from "../models/index.js";
+import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { Drone1, User, UserProfile, UserRole, MasterRole, SprayingDailyLogs, Op } = db;
 
@@ -178,19 +180,19 @@ export const getAllDroneStatuses = async (req, res) => {
 
     const allDrones = await getDronesWithPilotInfo(where);
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const paginated = allDrones.slice(offset, offset + parseInt(limit));
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 50);
+    const paginated = allDrones.slice(offset, offset + clampLimit(limit, 50));
 
     return res.status(200).json({
       success: true,
       data: paginated,
       total: allDrones.length,
-      page: parseInt(page),
-      totalPages: Math.ceil(allDrones.length / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(allDrones.length / clampLimit(limit, 50)),
     });
   } catch (err) {
     console.error("getAllDroneStatuses error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'getAllDroneStatuses');
   }
 };
 
@@ -277,7 +279,7 @@ export const getActiveDrones = async (req, res) => {
     });
   } catch (err) {
     console.error("getActiveDrones error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'getActiveDrones');
   }
 };
 
@@ -327,7 +329,7 @@ export const updateDroneStatus = async (req, res) => {
     });
   } catch (err) {
     console.error("updateDroneStatus error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'updateDroneStatus');
   }
 };
 
@@ -365,7 +367,7 @@ export const resetDailyStatus = async (req, res) => {
     });
   } catch (err) {
     console.error("resetDailyStatus error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'resetDailyStatus');
   }
 };
 
@@ -387,14 +389,16 @@ export const resetDailyStatus = async (req, res) => {
  */
 export const getActivePilots = async (req, res) => {
   try {
-    // Step 1 — find the 'pilot' role id(s) directly from MASTER_ROLE
+    // Step 1 — find the 'pilot' and 'copilot' role id(s) directly from MASTER_ROLE
     const pilotRoles = await MasterRole.findAll({
       where: {
-        role_name: { [Op.iLike]: "pilot" },
+        role_name: { [Op.iLike]: "%pilot%" },
         is_active: true,
       },
-      attributes: ["id"],
+      attributes: ["id", "role_name"],
     });
+    const roleIdToName = {};
+    pilotRoles.forEach(r => roleIdToName[r.id] = r.role_name);
     const pilotRoleIds = pilotRoles.map((r) => r.id);
 
     if (pilotRoleIds.length === 0) {
@@ -407,8 +411,14 @@ export const getActivePilots = async (req, res) => {
         role_id: { [Op.in]: pilotRoleIds },
         is_active: true,
       },
-      attributes: ["user_id"],
+      attributes: ["user_id", "role_id"],
     });
+    
+    const userToRoleName = {};
+    userRoleRows.forEach(r => {
+      if (r.user_id) userToRoleName[r.user_id] = roleIdToName[r.role_id];
+    });
+
     const pilotUserIds = [...new Set(userRoleRows.map((r) => r.user_id).filter(Boolean))];
 
     if (pilotUserIds.length === 0) {
@@ -452,7 +462,7 @@ export const getActivePilots = async (req, res) => {
         last_name: lastName,
         full_name: `${firstName} ${lastName}`.trim() || raw.username || raw.email,
         user_image_url: profile?.user_image_url || null,
-        role_name: "pilot",
+        role_name: userToRoleName[raw.id] || "pilot",
       };
     });
 
@@ -463,6 +473,6 @@ export const getActivePilots = async (req, res) => {
     });
   } catch (err) {
     console.error("getActivePilots error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error.", error: err.message });
+    return respondWithError(req, res, err, 'getActivePilots');
   }
 };

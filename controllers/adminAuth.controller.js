@@ -7,6 +7,8 @@ import env from '../config/env.js';
 import { ApiResponse } from '../utils/apiResponse.js';
 import { ApiError } from '../utils/apiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import logger from '../utils/logger.js';
+import { loadAdminAccess } from '../middleware/adminAuth.middleware.js';
 import {
   generateOneTimeToken,
   hashToken,
@@ -34,27 +36,6 @@ const {
 } = db;
 
 // ── helpers ────────────────────────────────────────────────────────
-
-const loadPermissions = async (userId) => {
-  const userRole = await UserRole.findOne({ where: { user_id: userId } });
-  if (!userRole) return [];
-
-  const rolePrivs = await MasterRolePrivilage.findAll({
-    where: { role_id: userRole.role_id },
-  });
-  const privIds = rolePrivs.map((rp) => rp.privilage_id);
-  if (!privIds.length) return [];
-
-  const privs = await MasterPrivilage.findAll({ where: { id: privIds } });
-  return privs.map((p) => p.privilage_name);
-};
-
-const loadRole = async (userId) => {
-  const userRole = await UserRole.findOne({ where: { user_id: userId } });
-  if (!userRole) return null;
-  const role = await MasterRole.findByPk(userRole.role_id);
-  return role?.role_name || null;
-};
 
 const signToken = (payload) =>
   jwt.sign(payload, env.JWT_SECRET, {
@@ -111,16 +92,14 @@ export const adminLoginController = asyncHandler(async (req, res) => {
   resetLoginAttempts(email);
 
   // Load permissions & role
-  const [permissions, role] = await Promise.all([
-    loadPermissions(user.id),
-    loadRole(user.id),
-  ]);
+  const { permissions, role } = await loadAdminAccess(user.id);
 
   // Issue JWT
   const token = signToken({ id: user.id, email: user.email, user_type: 2 });
 
   // Update last_login
-  await profile.update({ last_login: new Date() });
+  // Not awaited: the admin must not wait a database round trip just to have "last login" stamped
+  profile.update({ last_login: new Date() }).catch((err) => logger.warn(`Could not store last_login: ${err.message}`));
 
   return res
     .status(200)
@@ -224,9 +203,11 @@ export const forgotPasswordController = asyncHandler(async (req, res) => {
     });
 
     const resetLink = buildResetLink(raw);
-    console.log(`[Admin] Reset link for ${email}:`, resetLink);
+    if (env.NODE_ENV !== 'production') logger.info(`[Admin] Reset link for ${email}: ${resetLink}`);
 
-    await sendPasswordResetEmail(email, profile.full_name, resetLink);
+    // Not awaited: the answer must look the same (and take the same time) whether or not the account exists,
+    // and a mail-server problem must not turn this public endpoint into an error. Failures are logged by the mail service.
+    sendPasswordResetEmail(email, profile.full_name, resetLink).catch(() => {});
   }
 
   return res
@@ -360,21 +341,29 @@ export const createAdminController = asyncHandler(async (req, res) => {
     );
   });
 
-  // Send setup email (after transaction commits — fire and forget on error)
+  // Send the setup email after the transaction commits. The account exists either way; the caller is told
+  // whether the invitation went out so the admin can use "resend setup" instead of assuming it was delivered.
   const setupLink = buildSetupLink(raw);
-  console.log(`[Admin] Setup link for ${email}:`, setupLink);
+  if (env.NODE_ENV !== 'production') logger.info(`[Admin] Setup link for ${email}: ${setupLink}`);
 
-  sendAdminSetupEmail(email, full_name, setupLink).catch((err) =>
-    console.error('[Email] Failed to send setup email:', err.message)
-  );
+  let emailSent = true;
+  let emailError = null;
+  try {
+    await sendAdminSetupEmail(email, full_name, setupLink);
+  } catch (err) {
+    emailSent = false;
+    emailError = err.message;
+  }
 
   return res
     .status(201)
     .json(
       new ApiResponse(
         201,
-        { email, full_name, role: role.role_name },
-        `Admin created. Setup email sent to ${email}.`
+        { email, full_name, role: role.role_name, email_sent: emailSent, ...(emailError && { email_error: emailError }) },
+        emailSent
+          ? `Admin created. Setup email sent to ${email}.`
+          : `Admin created, but the setup email could not be sent to ${email}. Use "resend setup" once email is working.`
       )
     );
 });

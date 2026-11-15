@@ -10,6 +10,7 @@ const User = (sequelize, DataTypes) => sequelize.define('User', {
   mobile_number: DataTypes.STRING,
   is_superuser: DataTypes.BOOLEAN,
   user_type: DataTypes.INTEGER,
+  refresh_token: DataTypes.TEXT,
   isMobileVerify: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,

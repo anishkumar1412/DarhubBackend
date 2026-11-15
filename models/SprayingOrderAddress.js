@@ -9,8 +9,11 @@ const SprayingOrderAddress = (sequelize, DataTypes) => sequelize.define('Sprayin
   district: DataTypes.INTEGER,
   block: DataTypes.INTEGER,
   village: DataTypes.STRING,
+  lane1: DataTypes.STRING,
+  lane2: DataTypes.STRING,
   address1: DataTypes.STRING,
   address2: DataTypes.STRING,
+  pincode: DataTypes.STRING,
   ...AuditFields,
 }, {
   tableName: 'SPRAYING_ORDER_ADDRESS',

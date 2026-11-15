@@ -5,6 +5,7 @@
  */
 
 import db from '../models/index.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { InventoryAccessory, InventoryDrone, InventoryShipment, MaintenanceLog, PurchaseOrder, Op } = db;
 
@@ -124,6 +125,6 @@ export const getDashboardStats = async (req, res) => {
     });
   } catch (err) {
     console.error('getDashboardStats error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getDashboardStats');
   }
 };

@@ -1,0 +1,7 @@
+.env.test
+server.log
+server.pid
+e2e-out/
+routes.txt
+pixel.png
+notes.txt

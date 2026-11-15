@@ -6,6 +6,8 @@
  */
 
 import db from '../models/index.js';
+import { clampPage, clampLimit } from '../utils/pagination.js';
+import { respondWithError } from '../middleware/errorHandler.js';
 
 const { InventoryAccessory, Op } = db;
 
@@ -63,7 +65,7 @@ export const createAccessory = async (req, res) => {
     return res.status(201).json({ success: true, data: accessory, message: 'Accessory created successfully.' });
   } catch (err) {
     console.error('createAccessory error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'createAccessory');
   }
 };
 
@@ -102,12 +104,12 @@ export const getAllAccessories = async (req, res) => {
 
     if (andConditions.length) where[Op.and] = andConditions;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await InventoryAccessory.findAndCountAll({
       where,
       order: [['created_on', 'DESC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
     });
 
@@ -115,12 +117,12 @@ export const getAllAccessories = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getAllAccessories error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAllAccessories');
   }
 };
 
@@ -137,7 +139,7 @@ export const getAccessoryById = async (req, res) => {
     return res.status(200).json({ success: true, data: accessory });
   } catch (err) {
     console.error('getAccessoryById error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAccessoryById');
   }
 };
 
@@ -185,7 +187,7 @@ export const updateAccessory = async (req, res) => {
     return res.status(200).json({ success: true, data: accessory, message: 'Accessory updated successfully.' });
   } catch (err) {
     console.error('updateAccessory error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'updateAccessory');
   }
 };
 
@@ -204,7 +206,7 @@ export const deleteAccessory = async (req, res) => {
     return res.status(200).json({ success: true, message: 'Accessory deleted successfully.' });
   } catch (err) {
     console.error('deleteAccessory error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'deleteAccessory');
   }
 };
 
@@ -232,7 +234,7 @@ export const transferAccessory = async (req, res) => {
     return res.status(200).json({ success: true, data: accessory, message: 'Accessory transferred successfully.' });
   } catch (err) {
     console.error('transferAccessory error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'transferAccessory');
   }
 };
 
@@ -267,12 +269,12 @@ export const getLowStockAccessories = async (req, res) => {
     if (status) andConditions.push({ status: { [Op.like]: `%${status}%` } });
     if (andConditions.length) where[Op.and].push(...andConditions);
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (clampPage(page) - 1) * clampLimit(limit, 20);
 
     const { count, rows } = await InventoryAccessory.findAndCountAll({
       where,
       order: [['quantity', 'ASC']],
-      limit: parseInt(limit),
+      limit: clampLimit(limit, 20),
       offset,
     });
 
@@ -280,12 +282,12 @@ export const getLowStockAccessories = async (req, res) => {
       success: true,
       data: rows,
       total: count,
-      page: parseInt(page),
-      totalPages: Math.ceil(count / parseInt(limit)),
+      page: clampPage(page),
+      totalPages: Math.ceil(count / clampLimit(limit, 20)),
     });
   } catch (err) {
     console.error('getLowStockAccessories error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getLowStockAccessories');
   }
 };
 
@@ -323,6 +325,6 @@ export const getAccessoryStats = async (req, res) => {
     });
   } catch (err) {
     console.error('getAccessoryStats error:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error.', error: err.message });
+    return respondWithError(req, res, err, 'getAccessoryStats');
   }
 };
