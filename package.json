@@ -18,6 +18,7 @@
     "db:migrate:undo": "sequelize-cli db:migrate:undo",
     "db:migrate:undo:all": "sequelize-cli db:migrate:undo:all",
     "db:seed": "sequelize-cli db:seed:all",
+    "db:seed:odisha": "sequelize-cli db:seed --seed 20261115000002-seed-odisha-locations.cjs",
     "db:seed:demo": "sequelize-cli db:seed:all --seeders-path seeders/demo",
     "db:seed:locations": "node scripts/download-lgd.js ./lgd-data && node scripts/import-lgd.js ./lgd-data --apply",
     "db:check": "node scripts/check-schema.js",
