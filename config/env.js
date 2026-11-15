@@ -116,6 +116,8 @@ const envSchema = Joi.object({
 
 const { error, value: envVars } = envSchema.validate(process.env, { abortEarly: false });
 
+export const envConfigError = error ? error.details.map((detail) => detail.message).join(', ') : null;
+
 if (error) {
   const errorMessage = error.details.map((detail) => detail.message).join(', ');
   if (logger && logger.error) {
@@ -123,26 +125,28 @@ if (error) {
   } else {
       console.error(`❌ Config validation error: ${errorMessage}`);
   }
-  process.exit(1);
+  if (!process.env.VERCEL) {
+    process.exit(1);
+  }
 }
 
 const env = {
   // ── Database ──────────────────────────────────────────────────
-  DB_HOST:     envVars.DB_HOST,
-  DB_USER:     envVars.DB_USER,
-  DB_PASSWORD: envVars.DB_PASSWORD,
-  DB_NAME:     envVars.DB_NAME,
-  DB_PORT:     envVars.DB_PORT,
-  DB_DIALECT:  envVars.DB_DIALECT,
-  DB_SSL:      envVars.DB_SSL,
+  DB_HOST:     envVars?.DB_HOST || 'localhost',
+  DB_USER:     envVars?.DB_USER || 'postgres',
+  DB_PASSWORD: envVars?.DB_PASSWORD || '',
+  DB_NAME:     envVars?.DB_NAME || 'postgres',
+  DB_PORT:     envVars?.DB_PORT || 5432,
+  DB_DIALECT:  envVars?.DB_DIALECT || 'postgres',
+  DB_SSL:      envVars?.DB_SSL ?? true,
 
   // ── App ───────────────────────────────────────────────────────
-  PORT:     envVars.PORT,
-  NODE_ENV: envVars.NODE_ENV,
+  PORT:     envVars?.PORT || 5678,
+  NODE_ENV: envVars?.NODE_ENV || 'production',
 
   // ── JWT ───────────────────────────────────────────────────────
-  JWT_SECRET:         envVars.JWT_SECRET,
-  JWT_REFRESH_SECRET: envVars.JWT_REFRESH_SECRET,
+  JWT_SECRET:         envVars?.JWT_SECRET || 'jwt_secret_placeholder',
+  JWT_REFRESH_SECRET: envVars?.JWT_REFRESH_SECRET,
 
   // ── Admin auth ────────────────────────────────────────────────
   ADMIN_TOKEN_EXPIRY:       envVars.ADMIN_TOKEN_EXPIRY,

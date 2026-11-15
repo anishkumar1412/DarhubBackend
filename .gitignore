@@ -1,7 +1,10 @@
 node_modules/
 .env
 .vscode/
+.floci-data/
 scratch/.floci-data/
+uploads/*
+!uploads/.gitkeep
 
 .env.*
 !.env.example

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import helmet from 'helmet';
 import { randomUUID } from 'crypto';
 import logger from './utils/logger.js';
-import env from './config/env.js';
+import env, { envConfigError } from './config/env.js';
 import { errorHandler, notFoundHandler, hideServerErrorDetails } from './middleware/errorHandler.js';
 import { createApiLimiter, createAuthLimiter } from './middleware/rateLimiters.js';
 import { authenticateAdmin } from './middleware/adminAuth.middleware.js';
@@ -142,7 +142,16 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // ── Health ────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.send("Welcome to DARHUB Backend"));
+app.get("/", (req, res) => {
+  if (envConfigError && process.env.VERCEL) {
+    return res.status(200).json({
+      status: "running",
+      message: "DARHUB Backend is running on Vercel",
+      warning: "Environment variables missing in Vercel project settings: " + envConfigError
+    });
+  }
+  res.send("Welcome to DARHUB Backend");
+});
 
 // For load balancers / uptime monitors: 200 only when the database answers too
 app.get("/health", async (req, res) => {
