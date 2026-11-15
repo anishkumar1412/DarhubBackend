@@ -12,6 +12,47 @@ const envPath    = process.env.ENV_FILE ? path.resolve(process.env.ENV_FILE) : p
 
 dotenv.config({ path: envPath });
 
+// ── Normalize / parse connection strings & credentials ─────────────
+const rawDb = process.env.DATABASE_URL || (process.env.DB_HOST && (process.env.DB_HOST.startsWith('postgres://') || process.env.DB_HOST.startsWith('postgresql://')) ? process.env.DB_HOST : null);
+if (rawDb) {
+  try {
+    const parsed = new URL(rawDb);
+    process.env.DB_HOST = parsed.hostname;
+    if (parsed.port) process.env.DB_PORT = parsed.port;
+    if (parsed.username) process.env.DB_USER = decodeURIComponent(parsed.username);
+    if (parsed.password) process.env.DB_PASSWORD = decodeURIComponent(parsed.password);
+    if (parsed.pathname && parsed.pathname.length > 1) {
+      process.env.DB_NAME = parsed.pathname.replace(/^\//, '');
+    }
+    if (!process.env.DB_DIALECT) process.env.DB_DIALECT = 'postgres';
+  } catch (err) {
+    // leave as-is if parsing fails
+  }
+}
+
+// Render internal database hostname check (dpg-xxxx without domain)
+if (process.env.DB_HOST && /^dpg-[a-z0-9]+$/i.test(process.env.DB_HOST)) {
+  const warningMsg = `⚠️ DB_HOST "${process.env.DB_HOST}" is a Render Internal Database Hostname. From Vercel or outside Render, you must use the Render External Database URL (e.g. dpg-xxx.oregon-postgres.render.com).`;
+  console.warn(warningMsg);
+}
+
+// Auto-detect base64 or JSON in FCM_SERVICE_ACCOUNT_FILE
+if (process.env.FCM_SERVICE_ACCOUNT_FILE && !process.env.FCM_SERVICE_ACCOUNT_JSON) {
+  const trimmed = process.env.FCM_SERVICE_ACCOUNT_FILE.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('ewog')) {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = trimmed;
+    delete process.env.FCM_SERVICE_ACCOUNT_FILE;
+  }
+}
+
+// Clean up trailing quotes or escaped backslashes in JWT secrets
+if (process.env.JWT_REFRESH_SECRET) {
+  process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET.replace(/^['"]|['"\\]+$/g, '');
+}
+if (process.env.JWT_SECRET) {
+  process.env.JWT_SECRET = process.env.JWT_SECRET.replace(/^['"]|['"\\]+$/g, '');
+}
+
 const envSchema = Joi.object({
   // ── Database ──────────────────────────────────────────────────
   DB_HOST:     Joi.string().required(),
