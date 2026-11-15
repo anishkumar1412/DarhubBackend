@@ -143,12 +143,17 @@ if (process.env.NODE_ENV !== 'production') {
 
 // ── Health ────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  if (envConfigError && process.env.VERCEL) {
-    return res.status(200).json({
-      status: "running",
-      message: "DARHUB Backend is running on Vercel",
-      warning: "Environment variables missing in Vercel project settings: " + envConfigError
-    });
+  if (process.env.VERCEL) {
+    const isRenderInternal = env.DB_HOST && /^dpg-[a-z0-9]+$/i.test(env.DB_HOST);
+    if (isRenderInternal || envConfigError) {
+      return res.status(200).json({
+        status: "running",
+        message: "DARHUB Backend is running on Vercel",
+        warning: isRenderInternal
+          ? `DB_HOST "${env.DB_HOST}" is a Render Internal Hostname and cannot be reached from Vercel. Please copy the EXTERNAL Database Host/URL from your Render dashboard (under PostgreSQL -> Connect -> External Database URL).`
+          : ("Environment variables missing in Vercel project settings: " + envConfigError)
+      });
+    }
   }
   res.send("Welcome to DARHUB Backend");
 });

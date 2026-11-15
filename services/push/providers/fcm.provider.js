@@ -14,7 +14,14 @@ let messagingPromise = null;
 
 const readServiceAccount = () => {
   let raw = env.FCM_SERVICE_ACCOUNT_JSON;
-  if (!raw && env.FCM_SERVICE_ACCOUNT_FILE) raw = fs.readFileSync(env.FCM_SERVICE_ACCOUNT_FILE, 'utf8');
+  if (!raw && env.FCM_SERVICE_ACCOUNT_FILE) {
+    const candidate = env.FCM_SERVICE_ACCOUNT_FILE.trim();
+    if (candidate.startsWith('{') || candidate.startsWith('ewog')) {
+      raw = candidate;
+    } else {
+      raw = fs.readFileSync(env.FCM_SERVICE_ACCOUNT_FILE, 'utf8');
+    }
+  }
   if (!raw) throw new Error('FCM is not configured: set FCM_SERVICE_ACCOUNT_JSON or FCM_SERVICE_ACCOUNT_FILE');
   raw = raw.trim();
   if (!raw.startsWith('{')) raw = Buffer.from(raw, 'base64').toString('utf8');
