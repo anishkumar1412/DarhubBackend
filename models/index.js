@@ -123,12 +123,10 @@ const sequelize = new Sequelize(
 );
 
 // ── Test connection ───────────────────────────────────────────────
-try {
-  await sequelize.authenticate();
-  logger.info('✅ Connection has been established successfully.');
-} catch (err) {
-  logger.error('❌ Unable to connect to the database:', err);
-}
+sequelize.authenticate()
+  .then(() => logger.info('✅ Connection has been established successfully.'))
+  .catch((err) => logger.error('❌ Unable to connect to the database:', err.message));
+
 
 // ── Register all models ───────────────────────────────────────────
 const db = {
